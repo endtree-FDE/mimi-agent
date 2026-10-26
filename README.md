@@ -1,6 +1,20 @@
-# 飞书群机器人模板
+# Mimi Agent
 
-这是一个跑在你自己电脑上的飞书群机器人模板。有人在群里 @ 它，或者私聊它，它就用你这台电脑上的 Cursor（或你自己的 OpenAI 兼容模型账号）来回答。
+[![version](https://img.shields.io/badge/version-0.9.0-blue)](CHANGELOG.md)
+[![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+[![platform](https://img.shields.io/badge/platform-Windows-lightgrey)](scripts/setup.ps1)
+[![model](https://img.shields.io/badge/model-Cursor%20%7C%20OpenAI%20compatible-blueviolet)](docs/换模型.md)
+
+飞书群助手开源模板，跑在你自己电脑上。有人在群里 @ 它，或者私聊它，它就用你这台电脑上的 Cursor（或你自己的 OpenAI 兼容模型账号）来回答。
+
+这套模板来自幕景宇宙的群助手 Mimi。想先看看 Mimi 是什么样子，可以去[幕景宇宙官网的合作页](https://mujing-universe.pages.dev/contact/)直接和它聊几句，作品介绍在[这里](https://mujing-universe.pages.dev/works/mimi-agent/)。
+
+## 谁适合用
+
+- 团队或工作室主要在飞书群里沟通，想要一个能读文档、排日程、记事情的助手
+- 在意数据去向：进程、密钥、聊天记忆和知识库都在自己电脑上，不进第三方托管
+- 手上有 Cursor 订阅，或任一 OpenAI 兼容模型的 API Key
+- 用 Windows（脚本按 Windows 写；其他平台照 [docs/新建智能体.md](docs/新建智能体.md) 的手动路径走）
 
 它能看本群最近的聊天，读分享给它的文档、日历和多维表格，也能看图片和文件。要新建文档、建日程或往表格加记录时，必须由发起人本人确认，它才会动手。默认在卡片上点「确认」或「取消」。飞书还没开通卡片回调时，自动改回 6 位确认码。确认不能关掉。见 [docs/确认方式.md](docs/确认方式.md)。
 
