@@ -28,6 +28,10 @@ kb_new/
 bundles/
 uploads/
 
+# 播报正文。只提交样子，不提交填好的几行。
+broadcast/brief.txt
+broadcast/pending.txt
+
 # 客户名名单和本地密钥。不要提交填好的文件。
 redact.txt
 redact_candidates.txt

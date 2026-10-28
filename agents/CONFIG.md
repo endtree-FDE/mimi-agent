@@ -439,7 +439,7 @@ python checks/check_config.py agents/example.json
 
 ## 早晨摘要 digest
 
-默认关。这是框架会主动发到群里的唯一一种消息，只有 `enabled` 为 `true` 才发。到点后每个群、每个本地日最多一条，重启也不会再发。正文不调用模型，不点名所有人。`chat_ids` 还得落在服务范围内：顶层 `chat_ids` 非空时只用那份；留空时用已经认下的群。
+默认关。只有 `enabled` 为 `true` 才发。到点后每个群、每个本地日最多一条，重启也不会再发。正文不调用模型，不点名所有人。`chat_ids` 还得落在服务范围内：顶层 `chat_ids` 非空时只用那份；留空时用已经认下的群。播报是另一项，见下一节。播报不读这里的日历和任务表。默认也关。
 
 | 键 | 默认 | 填什么 |
 |---|---|---|
@@ -458,9 +458,54 @@ python checks/check_config.py agents/example.json
 
 群里需要机器人已经在里面。权限：`im:message:send_as_bot`。日历编号是真的才需要 `calendar:calendar.event:read`；任务表编号是真的才需要 `base:record:read`。改完要发布版本。演练、自检和 `--doctor` 不发摘要。
 
+## 播报 broadcast
+
+默认关。这是另一条主动发到群里的消息，和早晨摘要分开。不写这一段，或 `enabled` 不是 `true`，就不发，`/状态` 也不多这一行。不调用模型，不读日历，不读任务表。私聊里的「设置」卡片不包含这一项，要在自己的配置文件里打开。
+
+到了 `time`（不写是 `09:00`，时区不写是 `Asia/Shanghai`）之后的 `window_min` 分钟内（不写是 30），给 `chat_ids` 里、并且已经在服务范围内的每个群发一条。服务范围仍是：顶层 `chat_ids` 非空时只用它；留空时用已经认下的群。只写在顶层、不写进 `broadcast.chat_ids`，不会发。只写进 `broadcast.chat_ids`、不在服务范围里，也不会发。
+
+每个群、每个本地日最多一条，记在 `state/broadcast_state.json`。这和 `state/digest_state.json` 不是同一份。打开播报不会去读日历或任务表，也不会占用早晨摘要的名额。重启落在同一窗口里不会再发。发送明确失败会放掉名额；超时或看不懂结果就保持占坑。配置了的段全部没读到时不占坑，大约 5 分钟后再试。有一段成功就发出去，失败的那段写成「暂时没有读到」，同一天不补第二条。
+
+不写 `source` 时，`text`、`urls`、`body_file`、`command` 里填了的都会进同一条，顺序就是这四样。`urls` 单独成「站点」一段。文件和命令的正文原样放进去，所以待审名单写在文件或命令输出里。`source` 写成 `file`、`command`、`static`、`http` 之一时，只用那一项。
+
+| 键 | 默认 | 填什么 |
+|---|---|---|
+| `enabled` | `false` | `true` 才到点发送。 |
+| `time` | `09:00` | `HH:MM`。写错就不发。 |
+| `timezone` | `Asia/Shanghai` | 认不出来的时区不发。 |
+| `chat_ids` | `[]` | 要接收的群。空着不发。`REPLACE_` 开头的会丢掉。不要把真实群号写进仓库。 |
+| `window_min` | `30` | 到点之后多少分钟内还可以补发。`0` 表示只在那一分钟。负数按 30。 |
+| `title` | `播报` | 标题，最长 40 字。 |
+| `source` | 空 | 空着就用下面填了的每一项。写了就只留一项。 |
+| `body_file` | 空 | 相对机器人目录的文本文件，例如 `broadcast/pending.txt`。绝对路径和 `..` 不读。样子在 `broadcast/brief.example.txt`。`broadcast/brief.txt` 和 `broadcast/pending.txt` 不要提交。 |
+| `command` | `[]` | 程序和参数组成的数组，只取标准输出。不经过 shell。`cmd`、`powershell`、`bash` 以及 `.bat`、`.cmd`、`.ps1` 不会启动。超时不写是 8 秒，小于 1 或大于 20 都按 8。标准错误丢掉。子进程环境里不放密钥变量。 |
+| `text` | 空 | 固定几行，和别的段一起发。 |
+| `urls` | `[]` | 最多 5 个公网地址，作为「站点」一段。只发状态码、`ok` 或 `fail`，以及大约 180 字摘录。不跟随跳转，不带查询参数。本机、局域网、链路本地和夹带密钥的地址直接跳过，不会去连。 |
+| `timeout_sec` | `8` | 命令和网页各自的超时。 |
+
+群里需要机器人已经在里面。权限仍是 `im:message:send_as_bot`，不因为这项再要日历或表格权限。演练、自检和 `--doctor` 不发。
+
+转塘艺讯这类群不要开早晨摘要。顶层 `chat_ids` 里已经有这个群之后，在你自己的 json（不要提交）里让 `digest.enabled` 保持 `false`，只开播报。站点健康放 `urls`，待审名单放 `body_file`。群号用你自己的，不要写进仓库。
+
+```json
+"digest": { "enabled": false },
+"broadcast": {
+  "enabled": true,
+  "time": "09:00",
+  "timezone": "Asia/Shanghai",
+  "window_min": 30,
+  "chat_ids": ["REPLACE_CHAT_ID"],
+  "title": "艺讯播报",
+  "urls": ["https://example.com/"],
+  "body_file": "broadcast/pending.txt"
+}
+```
+
+`broadcast/pending.txt` 里写待审那几行，例如「待审」和每条一行。仓库里没有资讯抓取。README 里的 mumu 是另一份配置，不是这段代码。`digest` 只拼日历和未完成任务。这一版的播报只发送上面准备好的正文。AI 资讯以后再做。
+
 ## 用量周报 report
 
-默认关。不写这一段，或 `enabled` 不是 `true`，就不会私聊，也不会占每周一次的名额。这是私聊，不是群消息。群里主动发的仍然只有早晨摘要。
+默认关。不写这一段，或 `enabled` 不是 `true`，就不会私聊，也不会占每周一次的名额。这是私聊，不是群消息。群里主动发的，是各自打开之后的早晨摘要和播报，默认都关。播报不读日历和任务表。
 
 打开后，到了 `weekday` 和 `time`（不写是周一 `09:00`，时区不写是 `Asia/Shanghai`），把上一整周的合计私聊给主人。`window_min` 不写是 180，这三小时里重启也不会再发一份。`report.owner_open_ids` 有可用编号时用它；空着就用 `alerts.owner_open_ids`，不要求 `alerts` 已经打开。两边都空、或都是 `REPLACE_` 开头，就不发。
 

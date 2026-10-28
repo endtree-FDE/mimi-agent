@@ -127,7 +127,8 @@ def test_write_and_repeat():
         check("写入后配置检查通过", code == 0 and errors == [] and hints == [] and "已写入" in text, text[-600:] + str(errors))
         check("新功能默认关闭",
               cfg.get("alerts", {}).get("enabled") is False and cfg.get("report", {}).get("enabled") is False
-              and cfg.get("digest", {}).get("enabled") is False and cfg.get("knowledge", {}).get("enabled") is False
+              and cfg.get("digest", {}).get("enabled") is False and cfg.get("broadcast", {}).get("enabled") is False
+              and cfg.get("knowledge", {}).get("enabled") is False
               and cfg.get("memory", {}).get("enabled") is False
               and cfg.get("memory", {}).get("growth", {}).get("enabled") is False
               and cfg.get("skills", {}).get("enabled") is False and cfg.get("progress", {}).get("enabled") is False)
