@@ -15,7 +15,7 @@ import json, os, re, subprocess, sys, time, logging, collections, threading, sql
 
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import utf8io  # 管道上的标准流改为 UTF-8，避免中文 Windows 的代码页把日志解崩
-import acp_client, calltrace, channels, crew, digest, feishu_link, guard, health_alert, knowledge, lifecycle, memory, memory_growth, observe, proc_identity, providers, retrospect, skill_evolve, usage
+import acp_client, calltrace, broadcast, channels, crew, digest, feishu_link, guard, health_alert, knowledge, lifecycle, memory, memory_growth, observe, proc_identity, providers, retrospect, skill_evolve, usage
 import confirm_mode, feature_switch
 from channels.base import Cap, can_update, status_modes
 from channels.feishu import MEMBER_ADDED, MEMBER_DELETED
@@ -310,6 +310,8 @@ def status_text(sess, chat_id=""):
         lines.append("断线提醒：开。长连接断开时用发送接口通知主人，不依赖那条长连接。")
     if digest.enabled(CFG):
         lines.append("早晨摘要：开。到点每个群最多一条，不会点名所有人。")
+    if broadcast.enabled(CFG):
+        lines.append("播报：开。到点每个群最多一条，不读日历和任务表，不会点名所有人。")
     if usage.enabled(CFG):
         lines.append("用量周报：开。每周私聊主人一次，不含问题原文和编号。")
     # 知识库检索默认关。没打开时不加这一行，/状态 的正文和以前一样。
@@ -909,6 +911,9 @@ def build_prompt(q, sess, ctx, extra="", rounds_left=None):
     note = digest.prompt_note(CFG)
     if note:
         parts.append(note)
+    ops_note = broadcast.prompt_note(CFG)
+    if ops_note:
+        parts.append(ops_note)
     parts.append("当前会话类型：%s。" % ("私聊" if ctx["chat_type"] == "p2p" else "群聊"))
     if limited: parts.append("这是未列入私聊名单的人。不要使用飞书工具，不要复述知识库、其他群或配置。")
     # 放在稳定前缀里：同一话题两次提问逐字相同，也不进预放正文的字数预算。
@@ -2262,7 +2267,7 @@ def _served_ids():
     return [r["chat_id"] for r in all_chats() if r.get("status") == "admitted"]
 
 def _outbound_send(kind, target, text, key):
-    """断线私聊和早晨摘要都走当前渠道。飞书在适配器里调用发送接口，不经过事件长连接。"""
+    """断线私聊、早晨摘要和播报都走当前渠道。飞书在适配器里调用发送接口，不经过事件长连接。"""
     try:
         result = CHANNEL.push_text(kind, target, text, key)
     except Exception:
@@ -2305,7 +2310,7 @@ def _digest_fetch(tool, argv):
     return data if isinstance(data, dict) else {"items": data or []}
 
 def maintenance_tick(now=None):
-    """断线提醒和早晨摘要。演练、自检、诊断都不发。两项默认关，关着时不会打开发送接口。"""
+    """断线提醒、早晨摘要和播报。演练、自检、诊断都不发。默认关着的项不会打开发送接口。播报不读日历和任务表。"""
     if DRY or CHECK or DOCTOR:
         return
     now = time.time() if now is None else float(now)
@@ -2320,6 +2325,10 @@ def maintenance_tick(now=None):
         digest.deliver(CFG, BASE, REDACT_NAMES, now, _digest_fetch, _send_chat, _served_ids(), log)
     except Exception:
         log.exception("digest tick failed")
+    try:
+        broadcast.deliver(CFG, BASE, REDACT_NAMES, now, _send_chat, _served_ids(), log)
+    except Exception:
+        log.exception("broadcast tick failed")
     try:
         usage.deliver(CFG, BASE, REDACT_NAMES, now, _outbound_send, log)
     except Exception:
@@ -2372,6 +2381,8 @@ def self_check():
         print("HINT digest.enabled 已打开，但 chat_ids 为空。不会往任何群发早晨摘要。")
     if digest_cfg["enabled"] and not digest_cfg["time_ok"]:
         print("HINT digest.time 不是 HH:MM，早晨摘要不会发。")
+    for line in broadcast.hints(CFG, BASE):
+        print("HINT " + line)
     report_cfg = usage.settings(CFG)
     if report_cfg["enabled"] and not usage.owner_ids(CFG):
         print("HINT report.enabled 已打开，但没有可用的主人编号。用量周报不会发。")

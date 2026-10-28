@@ -107,7 +107,7 @@ class FeishuChannel(Channel):
         return self.exe() + ["event", "consume", event_key, "--profile", self.cfg["profile"], "--as", "bot"]
 
     def push_text(self, kind, target, text, key):
-        """私聊主人或往群里发摘要。走 im +messages-send，不启动 event consume。"""
+        """私聊主人，或往群里发早晨摘要和播报。走 im +messages-send，不启动 event consume。"""
         import outbound
         exe = self.exe() if callable(self.exe) else self.exe
         folder = self.tmp or "."

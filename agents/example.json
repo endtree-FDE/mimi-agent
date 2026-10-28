@@ -67,6 +67,19 @@
     "title_field": "",
     "done_values": ["已完成", "完成", "已关闭", "关闭", "取消", "已取消", "done", "closed", "cancelled", "canceled"]
   },
+  "broadcast": {
+    "enabled": false,
+    "time": "09:00",
+    "timezone": "Asia/Shanghai",
+    "chat_ids": [],
+    "window_min": 30,
+    "title": "播报",
+    "body_file": "broadcast/brief.txt",
+    "command": [],
+    "timeout_sec": 8,
+    "text": "",
+    "urls": []
+  },
   "report": {
     "enabled": false,
     "owner_open_ids": [],

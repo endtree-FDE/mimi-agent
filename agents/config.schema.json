@@ -285,6 +285,25 @@
         "done_values": {"type": "array", "items": {"type": "string"}}
       }
     },
+    "broadcast": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "到点往指定群发一条只读播报。不写或 enabled 为 false 时不发。不调用模型，不读日历和任务表。body_file、command、text、urls 可以同时使用。",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "time": {"type": "string"},
+        "timezone": {"type": "string"},
+        "chat_ids": {"type": "array", "items": {"type": "string"}},
+        "window_min": {"type": "integer", "minimum": 0},
+        "title": {"type": "string"},
+        "source": {"type": "string"},
+        "body_file": {"type": "string"},
+        "command": {"type": "array", "items": {"type": "string"}},
+        "timeout_sec": {"type": "integer", "minimum": 1},
+        "text": {"type": "string"},
+        "urls": {"type": "array", "items": {"type": "string"}}
+      }
+    },
     "report": {
       "type": "object",
       "additionalProperties": true,

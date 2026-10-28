@@ -332,6 +332,10 @@ def build_config(example, answers):
     digest["enabled"] = False
     digest["chat_ids"] = []
     cfg["digest"] = digest
+    broadcast_cfg = cfg.get("broadcast") if isinstance(cfg.get("broadcast"), dict) else {}
+    broadcast_cfg["enabled"] = False
+    broadcast_cfg["chat_ids"] = []
+    cfg["broadcast"] = broadcast_cfg
     knowledge = cfg.get("knowledge") if isinstance(cfg.get("knowledge"), dict) else {}
     knowledge["enabled"] = False
     cfg["knowledge"] = knowledge

@@ -30,7 +30,9 @@
 | 灵波 | 探囊造物·灵波 VLA 赛 | 比赛群里的进度助手 |
 | mumu | 信息发布群 | 定时往群里发 AI 资讯日报和当天日程，@ 到人 |
 
-三个实例只是三份配置文件（`agents/*.json`），代码零改动。想看看 Mimi 的样子，去[幕景宇宙官网](https://mujing-universe.pages.dev/works/mimi-agent/)。
+三个实例只是三份配置文件（`agents/*.json`），仓库里没有 mumu 专用代码。想看看 Mimi 的样子，去[幕景宇宙官网](https://mujing-universe.pages.dev/works/mimi-agent/)。
+
+mumu 那份资讯日报不是框架里的早晨摘要。`digest` 只拼当天日历和未完成任务，不调用模型，也不点名。资讯抓取还不在这套代码里。要定时发站点健康和一段已经准备好的正文，用默认关闭的播报 `broadcast`，见 [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md)。它不读日历和任务表。
 
 仓库里的配置都是占位符。App Secret、填好的群编号和文档编号、客户名名单、聊天记忆和知识库原文都不应该提交。
 
@@ -70,7 +72,7 @@ flowchart LR
 
 ## 功能
 
-- 只在被 @ 或被允许的私聊里回答。断线私聊、早晨摘要和用量周报默认关。前两项见 [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md)，周报见 [docs/用量周报.md](docs/用量周报.md)。
+- 只在被 @ 或被允许的私聊里回答。断线私聊、早晨摘要、播报和用量周报默认关。前三项见 [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md)，周报见 [docs/用量周报.md](docs/用量周报.md)。播报不读日历和任务表。
 - 群默认仍看 `chat_ids`。要改成拉进群再认，把 `chat_ids` 留空并打开 `chats.auto_join`。默认还要白名单成员在群里发「/认群」，避免被陌生人拉进乱群消耗额度。见 [agents/CONFIG.md](agents/CONFIG.md)。
 - 同一个话题接着聊；发「新话题」就清空这几轮上下文。
 - 长期记忆按群分开。白名单里的人才能记和删，删除是真删。
@@ -95,8 +97,11 @@ flowchart LR
 | 知识检索 | 回答时引用这个群已经放进来的资料 | 私聊发「设置」 |
 | 记忆成长 | 提议记住群里定过的事，有人点头才写入 | 私聊发「设置」 |
 | 早间待办 | 早上往群里发今天的日程和未完成任务 | 私聊发「设置」 |
+| 播报 | 到点往指定群发站点健康和一段只读正文。不读日历和任务表 | 改自己的配置，见 [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md) |
 | 断线提醒 | 连不上时私聊主人 | 私聊发「设置」 |
 | 技能 | 选题、写稿这类事按现成步骤做 | 私聊发「设置」 |
+
+播报不在「设置」卡片里。卡片上仍是原来的九项。转塘艺讯这类群不要用卡片里的早间待办，只在配置里打开播报。
 
 ## 快速开始
 
@@ -133,7 +138,7 @@ python agentbot.py agents/example.json --doctor
 
 The purpose, the write lock, and the “do not commit” rule are in the English paragraph at the top. The diagram in [架构](#架构) is the path from a Feishu message to a redacted reply. Omitting `channel` keeps that Feishu path. [docs/渠道.md](docs/渠道.md) is the adapter boundary; [docs/渠道-企业微信.md](docs/渠道-企业微信.md) is the WeCom design and is not enabled by default. [docs/arch-now.mmd](docs/arch-now.mmd) is the current path with the model choice. [docs/arch-full.mmd](docs/arch-full.mmd) is the longer design, including jobs that are not on by default.
 
-On Windows, first-time setup is `scripts\setup.ps1`. It asks one question at a time and does not write the App Secret into a file. See [docs/一键安装.md](docs/一键安装.md). A 15-minute offline start is in [docs/快速开始.md](docs/快速开始.md). Troubleshooting is in [docs/排障.md](docs/排障.md). `--doctor` only prints a local diagnosis and does not send messages. Disconnect alerts and the morning digest are off unless `alerts.enabled` and `digest.enabled` are true. The weekly usage report is also off unless `report.enabled` is true, and it is a private message. See [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md) and [docs/用量周报.md](docs/用量周报.md).
+On Windows, first-time setup is `scripts\setup.ps1`. It asks one question at a time and does not write the App Secret into a file. See [docs/一键安装.md](docs/一键安装.md). A 15-minute offline start is in [docs/快速开始.md](docs/快速开始.md). Troubleshooting is in [docs/排障.md](docs/排障.md). `--doctor` only prints a local diagnosis and does not send messages. Disconnect alerts, the morning digest, and the broadcast are off unless `alerts.enabled`, `digest.enabled`, and `broadcast.enabled` are true. The broadcast sends one prepared text per chat per day. It can include public HTTP checks and a file or command, and it does not read the calendar or task table. The weekly usage report is also off unless `report.enabled` is true, and it is a private message. See [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md) and [docs/用量周报.md](docs/用量周报.md).
 
 Quick start on a machine that will really talk to Feishu:
 
@@ -178,6 +183,7 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `redact_file` | 客户名名单，默认 `redact.txt`，不要提交 |
 | `alerts` | 长连接或心跳不健康时私聊主人。不写或 `enabled` 为 `false` 时不发 |
 | `digest` | 到点往指定群发一条今日摘要。不写或 `enabled` 为 `false` 时不发。不会点名所有人 |
+| `broadcast` | 到点往指定群发一条只读播报。不写或 `enabled` 为 `false` 时不发。不调用模型，不读日历和任务表，不会点名所有人 |
 | `report` | 每周私聊主人一份用量合计。不写或 `enabled` 为 `false` 时不发。没有问题原文和编号 |
 
 `REPLACE_` 开头的值必须换成你自己的，留着不能启动。
@@ -226,6 +232,7 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `outbound.py` | 飞书渠道主动发送时调用的 `im +messages-send`。断线私聊和早晨摘要经 `push_text` 走到这里 |
 | `health_alert.py` | 断线提醒。默认关 |
 | `digest.py` | 早晨摘要。默认关。每个群每天最多一条 |
+| `broadcast.py` | 播报。默认关。站点、文件或命令的只读正文，每个群每天最多一条。不读日历和任务表 |
 | `usage.py` | 用量周报。默认关。每周私聊一次，重启不重发 |
 | `feature_switch.py` | 主人在私聊里开关功能。见 [docs/新手开关功能.md](docs/新手开关功能.md) |
 | `scripts/reload.ps1` | 改完开关后平滑重启：先停，确认没有第二个接收进程，再启动 |

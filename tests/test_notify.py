@@ -18,7 +18,8 @@ def check(name, cond, detail=""):
 
 EXAMPLE = json.load(open(os.path.join(FW, "agents", "example.json"), encoding="utf-8-sig"))
 check("例子里两项都关着",
-      EXAMPLE.get("alerts", {}).get("enabled") is False and EXAMPLE.get("digest", {}).get("enabled") is False)
+      EXAMPLE.get("alerts", {}).get("enabled") is False and EXAMPLE.get("digest", {}).get("enabled") is False
+      and EXAMPLE.get("broadcast", {}).get("enabled") is False)
 check("没写 alerts 或 enabled 不是 true 时不发",
       health_alert.settings({})["enabled"] is False
       and health_alert.settings({"alerts": {"enabled": False, "owner_open_ids": ["ou_owner1"]}})["enabled"] is False
@@ -583,6 +584,7 @@ try:
     loaded = json.load(open(path, encoding="utf-8"))
     loaded.pop("alerts", None)
     loaded.pop("digest", None)
+    loaded.pop("broadcast", None)
     json.dump(loaded, open(path, "w", encoding="utf-8"), ensure_ascii=False)
     events = os.path.join(off_dir, "events.jsonl")
     bot = "小助手"
@@ -601,7 +603,8 @@ try:
     quiet_reply = _reply_of(out, "st0")
     check("旧配置没有这两项时，提示词和 /状态 都和以前一样",
           proc.returncode == 0 and len(prompts) == 1 and note not in prompts[0] and "早晨摘要由程序" not in prompts[0]
-          and "断线提醒" not in quiet_reply and "早晨摘要" not in quiet_reply, quiet_reply + "\n" + out[-800:])
+          and "断线提醒" not in quiet_reply and "早晨摘要" not in quiet_reply
+          and "播报：开" not in quiet_reply and "播报由程序" not in prompts[0], quiet_reply + "\n" + out[-800:])
 finally:
     shutil.rmtree(off_dir, ignore_errors=True)
 
