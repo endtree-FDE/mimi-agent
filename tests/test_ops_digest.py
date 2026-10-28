@@ -278,6 +278,24 @@ try:
         shutil.rmtree(sec_dir, ignore_errors=True)
     check("shell、命令字符串和带密钥的参数都不会启动",
           ran == [] and shell_posts == [] and "pwned" not in json.dumps(shell_posts) and "supersecretvalue" not in json.dumps(shell_posts))
+    win_exe = r"C:\hostedtoolcache\windows\Python\3.12.12\x64\python.exe"
+    win_posts = []
+    win_dir = tempfile.mkdtemp(prefix="agentbot_ops_win_")
+    try:
+        def ok_run(argv, cwd, timeout, limit):
+            ran.append(argv)
+            return "missing"
+
+        win_cfg = _cfg(**{"source": "command", "command": [win_exe, "-c", "print('missing')"]})
+        broadcast.deliver(win_cfg, win_dir, [], sh_ts, lambda *a: win_posts.append(a) or "ok", ["oc_chat1"], run_command=ok_run)
+    finally:
+        shutil.rmtree(win_dir, ignore_errors=True)
+    check("Windows 解释器路径可以启动，路径里夹着密钥仍然拒绝",
+          ran == [[win_exe, "-c", "print('missing')"]]
+          and win_posts and "missing" in win_posts[0][1] and "pwned" not in win_posts[0][1]
+          and not broadcast._argv_ok([win_exe, "-c", "print('token=supersecretvalue')"], ())
+          and not broadcast._argv_ok([r"C:\secrets\token=supersecretvalue\python.exe", "-c", "print(1)"], ())
+          and not broadcast._argv_ok([r"C:\13812345678\python.exe"], ()))
 finally:
     shutil.rmtree(shell_dir, ignore_errors=True)
 

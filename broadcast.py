@@ -22,6 +22,8 @@ _ENV_KEEP = {
     "LOCALAPPDATA", "APPDATA",
 }
 _ENV_DROP = re.compile(r"(SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|API_KEY|APP_SECRET)", re.I)
+# 与 guard 里「本地路径」同一条。用来把盘符路径从启动检查里拆开，避免把密钥一起拆掉。
+_WIN_PATH = re.compile(r"(?i)(?<![A-Za-z])[A-Z]:[\\/][^\s，。；、：）)》」\"'`]*")
 _BODY_LIMIT = 8000
 _HTTP_LIMIT = 4096
 _EXCERPT = 180
@@ -261,6 +263,22 @@ def _clip(text):
     return text
 
 
+def _argv_has_secret(text, names):
+    """密钥、号码、邮箱和客户名拒绝启动。盘符路径本身不是密钥。
+    Windows 上解释器常是 C:\\...\\python.exe，若整段都当成路径打码，命令永远不会启动。
+    路径里面如果还夹着密钥，把斜杠拆开后再查一次，仍然拒绝。"""
+    raw = text or ""
+    if not raw:
+        return False
+    if guard.embeds_secret(_WIN_PATH.sub(" ", raw), names):
+        return True
+    for match in _WIN_PATH.finditer(raw):
+        unfolded = match.group(0).replace("\\", " ").replace("/", " ")
+        if guard.embeds_secret(unfolded, names):
+            return True
+    return False
+
+
 def _argv_ok(argv, names):
     if not isinstance(argv, list) or not argv or len(argv) > 8:
         return False
@@ -269,7 +287,7 @@ def _argv_ok(argv, names):
             return False
         if any(c in item for c in "\x00\r\n"):
             return False
-        if guard.embeds_secret(item, names):
+        if _argv_has_secret(item, names):
             return False
     base = os.path.basename(argv[0].replace("\\", "/")).lower()
     if base in _SHELLS or base.endswith(_SCRIPT_EXT):
