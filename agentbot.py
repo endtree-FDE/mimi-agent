@@ -305,7 +305,7 @@ def status_text(sess, chat_id=""):
         "技能：%s。" % skill_bit,
         "写入：%s。写操作要白名单和 6 位确认码，不会邀请别人。" % ("开" if write_on else "关"),
     ]
-    # 两项都默认关。没打开时不增加这几行，/状态 的正文和以前一样。
+    # 这几项都默认关。没打开时不加对应的那行，只有三项定时输出全关时多一行说明，免得看成漏写。
     if health_alert.settings(CFG)["enabled"]:
         lines.append("断线提醒：开。长连接断开时用发送接口通知主人，不依赖那条长连接。")
     if digest.enabled(CFG):
@@ -314,6 +314,10 @@ def status_text(sess, chat_id=""):
         lines.append("播报：开。到点每个群最多一条，不读日历和任务表，不会点名所有人。")
     if usage.enabled(CFG):
         lines.append("用量周报：开。每周私聊主人一次，不含问题原文和编号。")
+    else:
+        # 三项全关时也要说明。只看「没有这几行」很容易误以为漏了，实际是这个实例不会主动发定时消息。
+        if not digest.enabled(CFG) and not broadcast.enabled(CFG):
+            lines.append("定时输出：早晨摘要、播报、用量周报都关着，这个实例不会主动发任何定时消息。")
     # 知识库检索默认关。没打开时不加这一行，/状态 的正文和以前一样。
     kb_line = knowledge.status_line(BASE, CFG, chat_id)
     if kb_line:

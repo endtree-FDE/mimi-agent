@@ -373,9 +373,9 @@ try:
     code, out = _run(off, [path, "--dry-run", events], env_over={"AGENTBOT_FAKE_DUMP_PROMPT": "1"})
     reply = _reply_of(out, "r0")
     status = _reply_of(out, "s0")
-    check("没打开时 /report 仍交给模型，/状态 不提周报",
+    check("没打开时 /report 仍交给模型，/状态 不把周报说成开着",
           code == 0 and "agent start r0" in out and "只有主人" not in reply and "只有主人" not in out
-          and "用量周报" not in status, status + "\n" + reply)
+          and "用量周报：开" not in status, status + "\n" + reply)
 finally:
     shutil.rmtree(off, ignore_errors=True)
 

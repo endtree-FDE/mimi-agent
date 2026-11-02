@@ -572,6 +572,7 @@ try:
     reply = _reply_of(out, "st")
     check("打开后 /状态 多两行，不打印编号",
           "断线提醒：开" in reply and "早晨摘要：开" in reply and "ou_owner1" not in reply and "oc_chat1" not in reply, reply)
+    check("摘要开着时不再说没有定时输出", "都关着" not in reply, reply)
     check("演练不发摘要也不发断线私聊",
           not os.path.isfile(sink) and not os.path.isfile(os.path.join(run_dir, "state", "health_alert.json"))
           and not os.path.isfile(os.path.join(run_dir, "state", "digest_state.json")))
@@ -601,10 +602,11 @@ try:
     out = (proc.stdout or "") + (proc.stderr or "")
     prompts = _prompts(out)
     quiet_reply = _reply_of(out, "st0")
-    check("旧配置没有这两项时，提示词和 /状态 都和以前一样",
+    check("旧配置没有这两项时，提示词和以前一样；/状态 不说这些功能开了，但会说明没有定时输出",
           proc.returncode == 0 and len(prompts) == 1 and note not in prompts[0] and "早晨摘要由程序" not in prompts[0]
-          and "断线提醒" not in quiet_reply and "早晨摘要" not in quiet_reply
-          and "播报：开" not in quiet_reply and "播报由程序" not in prompts[0], quiet_reply + "\n" + out[-800:])
+          and "断线提醒" not in quiet_reply and "早晨摘要：开" not in quiet_reply
+          and "播报：开" not in quiet_reply and "播报由程序" not in prompts[0]
+          and "早晨摘要、播报、用量周报都关着" in quiet_reply, quiet_reply + "\n" + out[-800:])
 finally:
     shutil.rmtree(off_dir, ignore_errors=True)
 
