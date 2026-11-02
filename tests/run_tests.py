@@ -2734,6 +2734,9 @@ results.append(("主理人与专员", _cr.returncode == 0))
 print("\n-- verify --", flush=True)
 _vf = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_verify_report.py")], cwd=FW)
 results.append(("部署后验证", _vf.returncode == 0))
+print("\n-- verify deploy --", flush=True)
+_vd = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_verify_deploy.py")], cwd=FW)
+results.append(("部署核对一条命令", _vd.returncode == 0))
 # ---------- 知识库目录和 kb_read ----------
 import tools as _kbtools
 _kb_empty = _kbtools.kb_catalog(T, cfg, ["杭州某某科技有限公司"])
