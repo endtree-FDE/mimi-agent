@@ -148,6 +148,32 @@ finally:
 
 d, cp, _ = sandbox(heartbeat=str(int(NOW)))
 try:
+    import subprocess
+
+    def _git(*args):
+        return subprocess.run(["git", "-C", d, "-c", "user.email=t@example.com", "-c", "user.name=t"]
+                              + list(args), capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+    check("临时目录能起一个 git 仓库", _git("init", "-q").returncode == 0
+          and _git("add", "-A").returncode == 0 and _git("commit", "-q", "-m", "first").returncode == 0)
+    head = (_git("rev-parse", "HEAD").stdout or "").strip()[:7]
+    plain = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("HEAD 上没有标注 tag 时只提醒，不判失败",
+          plain["git"]["dirty"] == [] and plain["status"] == "PASS"
+          and any("没有标注 tag" in x and head in x for x in plain["warns"]), plain["warns"])
+    _git("tag", "-a", "-m", "部署标注", "deploy/test-20261102", "HEAD")
+    open(os.path.join(d, "本地留着的文件.txt"), "w", encoding="utf-8").write("未跟踪\n")
+    tagged = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("有标注 tag 后不再提 tag，改成提醒未提交改动",
+          tagged["git"]["tags"] == ["deploy/test-20261102"]
+          and not any("没有标注 tag" in x for x in tagged["warns"])
+          and any("未提交改动" in x and "本地留着的文件.txt" in x for x in tagged["warns"])
+          and tagged["status"] == "PASS", tagged["warns"])
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
+d, cp, _ = sandbox(heartbeat=str(int(NOW)))
+try:
     open(cp, "w", encoding="utf-8").write("{不是 JSON")
     got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
     check("配置坏了直接判 FAIL", got["status"] == "FAIL" and any("配置读不到" in x for x in got["fails"]), got["fails"])

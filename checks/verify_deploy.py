@@ -34,7 +34,7 @@ def git_info(base):
         info["error"] = "git 不可用，或者这个目录不是仓库"
         return info
     info["subject"] = run_git(base, ["log", "-1", "--format=%s"])
-    porcelain = run_git(base, ["status", "--porcelain"]) or ""
+    porcelain = run_git(base, ["-c", "core.quotePath=false", "status", "--porcelain"]) or ""
     info["dirty"] = [line for line in porcelain.splitlines() if line.strip()]
     info["tags"] = [t for t in (run_git(base, ["tag", "--points-at", "HEAD"]) or "").splitlines() if t]
     return info
@@ -187,6 +187,16 @@ def verify(base, config_path, with_doctor=True, now=None, processes=_AUTO):
               "git": git_info(base), "status": "PASS", "fails": [], "warns": []}
     if result["git"].get("error"):
         result["warns"].append("读不到 git 版本：%s" % result["git"]["error"])
+    else:
+        # 这两条只提醒，不判失败：线上目录常留着本地想保留的文件（未跟踪、故意删掉的占位），
+        # 但「HEAD 上没有部署标注 tag」和「工作区不干净」会直接影响能不能说清跑的是哪版。
+        dirty = result["git"].get("dirty") or []
+        if dirty:
+            result["warns"].append("工作区有 %d 处未提交改动：%s（核对以 HEAD %s 为准）"
+                                   % (len(dirty), "、".join(dirty[:2]), (result["git"].get("head") or "")[:7]))
+        if not result["git"].get("tags"):
+            result["warns"].append("HEAD %s 上没有标注 tag，说不清这台机器跑的是哪次部署"
+                                   % (result["git"].get("head") or "?")[:7])
     lock = deploy_lock_info(base, now)
     result["deploy_lock"] = lock
     if lock.get("error"):
