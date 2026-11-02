@@ -131,6 +131,25 @@ jobs:
           if (Test-ProfileInCommandLine 'python agentbot.py --profile bot2' 'bot') { $bad.Add('DRY profile prefix') }
           if (Test-PathToken 'C:\bots\bot2\agentbot.py' 'C:\bots\bot') { $bad.Add('DRY path prefix') }
           if (-not (Test-PathToken 'C:\bots\bot\agentbot.py' 'C:\bots\bot')) { $bad.Add('DRY path miss') }
+          # deploy.lock：升级或回滚期间让路。只在临时目录里造假锁，不碰本机部署，也不跑看门狗。
+          $lockBase = Join-Path $env:TEMP 'agentbot-lock-dry'
+          Remove-Item -LiteralPath $lockBase -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path (Join-Path $lockBase 'state') -Force | Out-Null
+          if ($null -ne (Get-DeployLock $lockBase)) { $bad.Add('DRY deploy.lock 没有文件要返回空') }
+          $epoch = [DateTimeOffset]::Now.ToUnixTimeSeconds()
+          [IO.File]::WriteAllText((Join-Path $lockBase 'state\deploy.lock'), "created=$($epoch - 30)`nttl=900`n")
+          $held = Get-DeployLock $lockBase
+          if (-not $held.held -or $held.ttl_sec -ne 900) { $bad.Add('DRY deploy.lock 刚写的锁要让路') }
+          [IO.File]::WriteAllText((Join-Path $lockBase 'state\deploy.lock'), "created=$($epoch - 3600)`nttl=900`n")
+          if ((Get-DeployLock $lockBase).held) { $bad.Add('DRY deploy.lock 过期后不能继续让路') }
+          [IO.File]::WriteAllText((Join-Path $lockBase 'state\deploy.lock'), "created=abc`n")
+          if (-not (Get-DeployLock $lockBase)) { $bad.Add('DRY deploy.lock 读不到时间要退回文件时间') }
+          Set-DeployLock $lockBase 30 'dry' | Out-Null
+          $written = [IO.File]::ReadAllBytes((Join-Path $lockBase 'state\deploy.lock'))
+          if ($written[0] -eq 0xEF) { $bad.Add('DRY Set-DeployLock 写了 BOM') }
+          Clear-DeployLock $lockBase | Out-Null
+          if ($null -ne (Get-DeployLock $lockBase)) { $bad.Add('DRY Clear-DeployLock 没删掉锁') }
+          Remove-Item -LiteralPath $lockBase -Recurse -Force -ErrorAction SilentlyContinue
           $tmp = Join-Path $env:TEMP 'agentbot-rotate-dry.log'
           Set-Content -LiteralPath $tmp -Value 'dry' -Encoding ascii
           Rotate-LogFile $tmp 2000000 5

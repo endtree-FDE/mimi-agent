@@ -1,4 +1,4 @@
-﻿# 看门狗：心跳超过 3 分钟没更新，或进程不在，就重新启动。
+﻿# 看门狗：心跳超过 3 分钟没更新，或进程不在，就重新启动。state\deploy.lock 还没过期时让路，不重启也不提醒。
 # 默认只写本地日志，不发消息。配置里 alerts.enabled 为 true 时，重启前请 Python 通知主人。
 # 那条通知走发送接口，不依赖事件长连接。没打开时不调用 Python。通知失败也不挡住重启。
 param([string]$Config = "agents\example.json")
@@ -9,6 +9,16 @@ $hb = Join-Path $base "state\heartbeat"; $wl = Join-Path $base "logs\watchdog.lo
 Rotate-LogFile $wl
 Rotate-LogFile (Join-Path $base "logs\stdout.log")
 Rotate-LogFile (Join-Path $base "logs\stderr.log")
+# 升级或回滚期间放 state\deploy.lock，这里直接让路：不重启，也不发断线提醒。
+# 锁自带 ttl（默认 900 秒），过期后照常保护；忘了删最多让路一个 ttl，不会一直没人管。
+$lock = Get-DeployLock $base
+if ($lock -and $lock.held) {
+  "$(Get-Date -Format s) yield to deploy.lock (age=$($lock.age_sec)s ttl=$($lock.ttl_sec)s)" | Add-Content $wl -Encoding utf8
+  exit 0
+}
+if ($lock) {
+  "$(Get-Date -Format s) deploy.lock 已过期 (age=$($lock.age_sec)s ttl=$($lock.ttl_sec)s)，继续检查" | Add-Content $wl -Encoding utf8
+}
 $pidf = Join-Path $base "bot.pid"; $alive = $false
 if (Test-Path $pidf) {
   $rawId = "$((Get-Content $pidf -ErrorAction SilentlyContinue | Select-Object -First 1))".Trim()

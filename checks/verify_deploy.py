@@ -3,7 +3,7 @@
 # 全程只读：不发消息、不写心跳、不启动也不结束任何进程；诊断复用 doctor 的只读接口。
 # 用法: python checks/verify_deploy.py --base C:/Users/x/mumu-agent-v3 [-c agents/mumu.json] [--no-doctor]
 # 退出码：0 结论 PASS；1 结论 FAIL；2 参数或目录不对。
-import argparse, hashlib, json, os, subprocess, sys, time
+import argparse, hashlib, json, os, re, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _p in (ROOT, os.path.join(ROOT, "checks")):
@@ -51,6 +51,34 @@ def heartbeat_info(base, now, threshold):
     out["missing"] = False
     out["age_sec"] = int(now - out["ts"])
     out["alive"] = out["age_sec"] < threshold
+    return out
+
+
+def deploy_lock_info(base, now):
+    """升级或回滚期间看门狗靠 state/deploy.lock 让路。这里的读法和 scripts/botproc.ps1 的 Get-DeployLock 一致，
+    核对脚本只报告，不删锁也不改锁。"""
+    path = os.path.join(base, "state", "deploy.lock")
+    out = {"path": path.replace("\\", "/"), "present": False, "held": False,
+           "age_sec": None, "ttl_sec": None}
+    if not os.path.isfile(path):
+        return out
+    out["present"] = True
+    stamp, ttl = None, 900
+    try:
+        for line in open(path, encoding="utf-8", errors="replace").read().splitlines():
+            text = line.strip().lstrip("﻿").strip()
+            if stamp is None and re.fullmatch(r"(?:created=)?(\d+)", text, re.IGNORECASE):
+                stamp = int(text.rsplit("=", 1)[-1]) if "=" in text else int(text)
+            elif re.fullmatch(r"ttl=(\d+)", text, re.IGNORECASE):
+                ttl = int(text.split("=", 1)[1])
+        if stamp is None:
+            stamp = int(os.path.getmtime(path))
+    except OSError as exc:
+        out["error"] = "锁文件读不到：%s" % exc
+        return out
+    out["ttl_sec"] = max(1, ttl)
+    out["age_sec"] = max(0, int(now - stamp))
+    out["held"] = out["age_sec"] < out["ttl_sec"]
     return out
 
 
@@ -159,6 +187,16 @@ def verify(base, config_path, with_doctor=True, now=None, processes=_AUTO):
               "git": git_info(base), "status": "PASS", "fails": [], "warns": []}
     if result["git"].get("error"):
         result["warns"].append("读不到 git 版本：%s" % result["git"]["error"])
+    lock = deploy_lock_info(base, now)
+    result["deploy_lock"] = lock
+    if lock.get("error"):
+        result["warns"].append("deploy.lock：%s" % lock["error"])
+    elif lock["held"]:
+        result["warns"].append("deploy.lock 还在（年龄 %ss / ttl %ss），看门狗正在让路"
+                               % (lock["age_sec"], lock["ttl_sec"]))
+    elif lock["present"]:
+        result["warns"].append("deploy.lock 已过期没删（年龄 %ss / ttl %ss）"
+                               % (lock["age_sec"], lock["ttl_sec"]))
     cfg, cinfo = load_config(config_path)
     result["config"] = cinfo
     if cfg is None:

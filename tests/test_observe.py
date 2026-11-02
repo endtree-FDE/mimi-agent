@@ -430,5 +430,23 @@ check("启动和看门狗会轮转日志，轮转脚本不结束进程",
       and "taskkill" not in rot_txt.lower() and "Stop-Process" not in rot_txt
       and start_txt.find("already running") < start_txt.find("Rotate-LogFile"))
 
+lock_txt = open(os.path.join(FW, "scripts", "botproc.ps1"), encoding="utf-8-sig").read()
+_cut = watch_txt.find("Get-DeployLock")
+_before = watch_txt[:_cut]
+_window = watch_txt[_cut:watch_txt.find("$pidf")]
+check("deploy.lock 让路在查进程和查心跳之前，让路时不重启也不发提醒",
+      _cut > 0 and "Rotate-LogFile" in _before and "$pidf" in watch_txt
+      and "held" in _window and "exit 0" in _window
+      and "alert-check" not in _window and "start.ps1" not in _window, _window)
+_block = lock_txt[lock_txt.find("function Get-DeployLock"):]
+check("锁只看 state 目录里的 deploy.lock，默认让路 900 秒",
+      "function Get-DeployLock" in lock_txt and "function Set-DeployLock" in lock_txt
+      and "function Clear-DeployLock" in lock_txt and "deploy.lock" in _block
+      and "$Base 'state'" in _block and "$ttl = 900" in _block)
+check("锁读不到时看门狗照常保护进程，坏文件不能变成永久让路",
+      "return $null" in _block[:_block.find("$ttl = 900")]
+      and "Stop-Process" not in _block and "Remove-Item" in _block
+      and "bot.lock" not in _block)
+
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)

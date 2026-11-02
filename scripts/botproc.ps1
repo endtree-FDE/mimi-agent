@@ -221,3 +221,45 @@ function Stop-LarkLeftovers([string]$Base, [string]$Profile) {
     Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
   }
 }
+
+function Get-DeployLock([string]$Base) {
+  # 升级或回滚时在实例目录放一个 state\deploy.lock，看门狗看到就不重启，也不发断线提醒。
+  # 内容写 created=<Unix 秒>，可再写 ttl=<秒>，默认 900 秒。读不到 created 就退回文件的修改时间。
+  # 没有这个文件返回 $null。文件读不了也返回 $null：宁可照常重启保护进程，也不因为一个坏锁文件失去自动重启。
+  $path = Join-Path (Join-Path $Base 'state') 'deploy.lock'
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  $ttl = 900
+  $stamp = $null
+  try {
+    foreach ($line in @(Get-Content -LiteralPath $path -ErrorAction Stop)) {
+      $text = "$line".Trim().TrimStart([char]0xFEFF).Trim()
+      if ($null -eq $stamp -and $text -match '^(?:created=)?(\d+)$') { $stamp = [int64]$Matches[1] }
+      elseif ($text -imatch '^ttl=(\d+)$') { $ttl = [int]$Matches[1] }
+    }
+    if ($null -eq $stamp) { $stamp = [DateTimeOffset]::new((Get-Item -LiteralPath $path).LastWriteTimeUtc).ToUnixTimeSeconds() }
+  } catch {
+    return $null
+  }
+  if ($ttl -lt 1) { $ttl = 1 }
+  $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$stamp
+  if ($age -lt 0) { $age = 0 }
+  return @{ path = $path; age_sec = [int]$age; ttl_sec = $ttl; held = ($age -lt $ttl) }
+}
+
+function Set-DeployLock([string]$Base, [int]$TtlSec = 900, [string]$Note = '') {
+  # 只写锁文件，不碰进程。升级或回滚脚本在动手之前调用它，结束时用 Clear-DeployLock。
+  $dir = Join-Path $Base 'state'
+  if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  $path = Join-Path $dir 'deploy.lock'
+  $lines = @("created=$([DateTimeOffset]::Now.ToUnixTimeSeconds())", "ttl=$TtlSec")
+  if ($Note) { $lines += "note=$($Note -replace '[\r\n]+', ' ')" }
+  [IO.File]::WriteAllLines($path, $lines, (New-Object System.Text.UTF8Encoding($false)))
+  return $path
+}
+
+function Clear-DeployLock([string]$Base) {
+  # 只删这一个文件。锁过期时看门狗也会继续正常工作，所以忘了删最多让路 ttl 秒。
+  $path = Join-Path (Join-Path $Base 'state') 'deploy.lock'
+  if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+  return $path
+}

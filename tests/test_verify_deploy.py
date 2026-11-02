@@ -123,6 +123,31 @@ finally:
 
 d, cp, _ = sandbox(heartbeat=str(int(NOW)))
 try:
+    lock_path = os.path.join(d, "state", "deploy.lock")
+    got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("没有 deploy.lock 时不提让路",
+          got["deploy_lock"]["present"] is False and got["deploy_lock"]["held"] is False
+          and not any("deploy.lock" in x for x in got["warns"]), got["warns"])
+    open(lock_path, "w", encoding="utf-8").write("created=%d\nttl=900\n" % (int(NOW) - 60))
+    held = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("deploy.lock 还生效时只提示，年龄和窗口一起给出",
+          held["deploy_lock"]["held"] is True and held["deploy_lock"]["age_sec"] == 60
+          and held["deploy_lock"]["ttl_sec"] == 900 and held["status"] == "PASS"
+          and any("看门狗正在让路" in x for x in held["warns"]), held["warns"])
+    open(lock_path, "w", encoding="utf-8").write("created=abc\n")
+    os.utime(lock_path, (NOW - 120, NOW - 120))
+    fallback = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("锁里没读到时间就退回文件时间", fallback["deploy_lock"]["age_sec"] == 120, fallback["deploy_lock"])
+    open(lock_path, "w", encoding="utf-8").write("created=%d\nttl=30\n" % (int(NOW) - 3600))
+    stale = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("过期的锁不算让路，但提醒还没删",
+          stale["deploy_lock"]["held"] is False and any("已过期没删" in x for x in stale["warns"]), stale["warns"])
+    check("核对脚本不删锁", os.path.isfile(lock_path))
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
+d, cp, _ = sandbox(heartbeat=str(int(NOW)))
+try:
     open(cp, "w", encoding="utf-8").write("{不是 JSON")
     got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
     check("配置坏了直接判 FAIL", got["status"] == "FAIL" and any("配置读不到" in x for x in got["fails"]), got["fails"])
