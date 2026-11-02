@@ -245,6 +245,45 @@ def _win_cmdline(pid):
     return (r.stdout or "").strip()
 
 
+def _linux_boot_epoch():
+    """/proc/stat 里的 btime（Unix 秒）。读不到返回 None。"""
+    try:
+        with open("/proc/stat", "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("btime"):
+                    return float(line.split()[1])
+    except (OSError, IndexError, ValueError):
+        return None
+    return None
+
+
+def _linux_hz():
+    try:
+        return float(os.sysconf("SC_CLK_TCK"))
+    except (ValueError, OSError, KeyError):
+        return 100.0
+
+
+def created_epoch(raw, windows=None):
+    """把上面那两个 created 换成 Unix 秒。
+    Windows 是 FILETIME（1601 年起算的 100 纳秒），Linux 是开机后经过的时钟节拍。
+    认不出来、或者是 0 和负数，就返回 None：宁可说不知道，也不猜一个启动时间出来吓人。"""
+    if windows is None:
+        windows = os.name == "nt"
+    try:
+        raw = int(float(raw))
+    except (TypeError, ValueError):
+        return None
+    if raw <= 0:
+        return None
+    if windows:
+        return raw / 1e7 - 11644473600
+    boot = _linux_boot_epoch()
+    if boot is None:
+        return None
+    return boot + raw / _linux_hz()
+
+
 def snapshot(pid):
     """进程不在了返回 None。在的话带上创建时间、命令行、工作目录；某一项读不到就是空字符串。"""
     try:
@@ -254,5 +293,9 @@ def snapshot(pid):
     if pid <= 0 or not _alive(pid):
         return None
     if os.name == "nt":
-        return {"pid": pid, "created": _win_created(pid), "cmdline": _win_cmdline(pid), "cwd": ""}
-    return {"pid": pid, "created": _linux_created(pid), "cmdline": _linux_cmdline(pid), "cwd": _linux_cwd(pid)}
+        created = _win_created(pid)
+        return {"pid": pid, "created": created, "created_epoch": created_epoch(created),
+                "cmdline": _win_cmdline(pid), "cwd": ""}
+    created = _linux_created(pid)
+    return {"pid": pid, "created": created, "created_epoch": created_epoch(created, windows=False),
+            "cmdline": _linux_cmdline(pid), "cwd": _linux_cwd(pid)}

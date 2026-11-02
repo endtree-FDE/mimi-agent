@@ -152,6 +152,46 @@ def current_processes():
     return doctor.default_processes()
 
 
+def default_start_of(pid):
+    snap = pi.snapshot(pid)
+    return snap.get("created_epoch") if snap else None
+
+
+def newest_source_mtime(base):
+    """这一层目录里最新的 .py 改动时间。只看顶层，那是运行中的模块所在；
+    没有 git 的目录也照样能用，拷贝文件升级同样算一次改代码。"""
+    newest = None
+    try:
+        for name in os.listdir(base):
+            if not name.endswith(".py"):
+                continue
+            full = os.path.join(base, name)
+            try:
+                if os.path.isfile(full):
+                    stamp = os.path.getmtime(full)
+                    newest = stamp if newest is None else max(newest, stamp)
+            except OSError:
+                continue
+    except OSError:
+        return None
+    return newest
+
+
+def runtime_info(base, serving_pids, start_of):
+    """代码比进程新，就说明这次改动还没被跑起来的那份进程用上。
+    只提醒，不判失败：改文档、改 checks 下的脚本都不需要重启，要不要重启是人的决定。"""
+    newest = newest_source_mtime(base)
+    started = None
+    if serving_pids:
+        started = start_of(serving_pids[0])
+    out = {"code_newest_sec": int(newest) if newest else None, "serving_started_sec": int(started) if started else None,
+           "restart_pending": None}
+    if newest and started:
+        out["lag_sec"] = int(newest - started)
+        out["restart_pending"] = newest > started
+    return out
+
+
 def lark_exe():
     if os.name == "nt":
         npm = os.path.join(os.environ.get("APPDATA", ""), "npm")
@@ -180,7 +220,7 @@ def config_schema_problems(path):
     return list(errors), list(hints)
 
 
-def verify(base, config_path, with_doctor=True, now=None, processes=_AUTO):
+def verify(base, config_path, with_doctor=True, now=None, processes=_AUTO, start_of=_AUTO):
     now = time.time() if now is None else float(now)
     base = os.path.abspath(base)
     result = {"base": base.replace("\\", "/"), "checked_at": int(now),
@@ -245,12 +285,23 @@ def verify(base, config_path, with_doctor=True, now=None, processes=_AUTO):
     elif not result["heartbeat"]["alive"]:
         result["fails"].append("心跳年龄 %ss 已到告警线 %ss" % (result["heartbeat"]["age_sec"], int(threshold)))
     procs = current_processes() if processes is _AUTO else processes
+    if start_of is _AUTO:
+        start_of = default_start_of
     if procs is None:
         result["warns"].append("列不出进程，拓扑没有核对")
     else:
         result["topology"] = topology(procs, base, cfg.get("profile"))
         if result["topology"]["serving"] != 1:
             result["fails"].append("本目录 agentbot 进程数=%s，应为 1" % result["topology"]["serving"])
+        else:
+            runtime = runtime_info(base, result["topology"]["serving_pids"], start_of)
+            result["runtime"] = runtime
+            if runtime["restart_pending"]:
+                result["warns"].append("代码比进程新：顶层 .py 改于 %s，进程启动于 %s（差 %d 秒），"
+                                       "agentbot 这类改动要重启才生效。只改文档或 checks 可以不管"
+                                       % (time.strftime("%m-%d %H:%M", time.localtime(runtime["code_newest_sec"])),
+                                          time.strftime("%m-%d %H:%M", time.localtime(runtime["serving_started_sec"])),
+                                          runtime["lag_sec"]))
     errors, hints = config_schema_problems(config_path)
     for where, msg in errors:
         result["fails"].append("配置校验：%s：%s" % (where or "（根）", msg))

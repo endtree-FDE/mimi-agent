@@ -252,5 +252,49 @@ try:
 finally:
     shutil.rmtree(d, ignore_errors=True)
 
+d, cp, _ = sandbox(heartbeat=str(int(NOW)))
+try:
+    src = os.path.join(d, "agentbot.py")
+    open(src, "w", encoding="ascii").write("x = 1\n")
+    os.utime(src, (NOW - 1000, NOW - 1000))
+    got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d), start_of=lambda pid: NOW - 3600)
+    check("代码比进程新时提醒要重启", got["runtime"]["restart_pending"] is True and got["runtime"]["lag_sec"] == 2600
+          and any("要重启才生效" in x for x in got["warns"]) and got["status"] == "PASS", (got["runtime"], got["warns"]))
+
+    os.utime(src, (NOW - 7200, NOW - 7200))
+    got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d), start_of=lambda pid: NOW - 3600)
+    check("进程启动晚于代码改动就不提醒", got["runtime"]["restart_pending"] is False
+          and not any("要重启才生效" in x for x in got["warns"]), (got["runtime"], got["warns"]))
+
+    got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d), start_of=lambda pid: None)
+    check("读不到进程启动时间时不猜", got["runtime"]["restart_pending"] is None
+          and got["runtime"]["serving_started_sec"] is None
+          and not any("要重启才生效" in x for x in got["warns"]), got["runtime"])
+
+    got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d, serving=2), start_of=lambda pid: NOW - 3600)
+    check("进程数不对时不报重启提醒（那是拓扑的 FAIL）",
+          "runtime" not in got and got["status"] == "FAIL", (got.get("runtime"), got["fails"]))
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
+d, cp, _ = sandbox(heartbeat=str(int(NOW)))
+try:
+    got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d), start_of=lambda pid: NOW - 60)
+    check("沙盒里没有顶层 .py 时不算待重启",
+          got["runtime"]["code_newest_sec"] is None and got["runtime"]["restart_pending"] is None, got["runtime"])
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
+import proc_identity as pi
+
+_ft = int((1793600000 + 11644473600) * 1e7)
+check("Windows FILETIME 换成 Unix 秒", abs(pi.created_epoch(_ft, windows=True) - 1793600000) < 1, pi.created_epoch(_ft, windows=True))
+check("空值、0、负数和乱码都不猜启动时间",
+      pi.created_epoch("", windows=True) is None and pi.created_epoch("0", windows=True) is None
+      and pi.created_epoch("-5", windows=True) is None and pi.created_epoch("abc", windows=True) is None
+      and pi.created_epoch(None, windows=True) is None)
+check("Linux 的节拍时间在没有 /proc/stat 时返回空",
+      pi.created_epoch("100", windows=False) is None or isinstance(pi.created_epoch("100", windows=False), float))
+
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)
