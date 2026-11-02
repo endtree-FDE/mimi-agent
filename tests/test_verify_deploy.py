@@ -118,6 +118,53 @@ try:
     check("kb_dir 写绝对路径时按原样落在仓外",
           got["config"]["kb_path"] == "C:/outside/mumu-kb" and got["config"]["kb_outside_repo"] is True
           and got["status"] == "PASS", got["config"])
+    check("仓外的 kb_dir 不存在时提醒「迁出后忘了改配置」这类错",
+          any("目录不存在" in x and "C:/outside/mumu-kb" in x for x in got["warns"]), got["warns"])
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
+d, cp, _ = sandbox(heartbeat=str(int(NOW)))
+try:
+    got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("没有 kb 目录时报出来，但不改结论",
+          got["config"]["kb"]["exists"] is False and got["config"]["kb"]["files"] == 0
+          and got["status"] == "PASS" and any("kb_dir" in x for x in got["warns"]), got["warns"])
+    os.makedirs(os.path.join(d, "kb"))
+    empty = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("kb 目录空着也算问题：检索得到的是零条资料",
+          empty["config"]["kb"]["exists"] is True and empty["config"]["kb"]["files"] == 0
+          and any("一个能检索的文件都没有" in x for x in empty["warns"]), empty["warns"])
+    os.makedirs(os.path.join(d, "kb", "notes"))
+    open(os.path.join(d, "kb", "a.md"), "w", encoding="utf-8").write("# 甲\n")
+    open(os.path.join(d, "kb", "notes", "b.txt"), "w", encoding="utf-8").write("乙\n")
+    open(os.path.join(d, "kb", "skip.docx"), "w", encoding="utf-8").write("不算\n")
+    open(os.path.join(d, "kb", ".hidden.md"), "w", encoding="utf-8").write("不算\n")
+    filled = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("条数按能检索的后缀算，点开头和不认的类型不算",
+          filled["config"]["kb"]["files"] == 2
+          and not any("一个能检索的文件都没有" in x for x in filled["warns"]), filled["config"]["kb"])
+    import tools as _tb
+    open(os.path.join(d, "outside.md"), "w", encoding="utf-8").write("# 仓库外\n")
+    try:
+        os.symlink(os.path.join(d, "outside.md"), os.path.join(d, "kb", "link.md"))
+        _linked = True
+    except OSError:
+        _linked = False
+    _cfg = json.load(open(cp, encoding="utf-8"))
+    _brief = _tb.kb_brief(d, _cfg)
+    _rows = (_tb.kb_catalog(d, _cfg, []) or "").splitlines()
+    check("核对的条数和提示词里那份目录是同一个口径，跳出目录的链接两边都不算",
+          _brief["files"] == 2 and len([r for r in _rows if r.startswith("- ")]) == 2
+          and ("link.md" not in "\n".join(_rows) if _linked else True), (_brief, _rows))
+finally:
+    shutil.rmtree(d, ignore_errors=True)
+
+d, cp, _ = sandbox(heartbeat=str(int(NOW)),
+                   overrides={"kb_index": {"enabled": False}, "knowledge": {"enabled": False}})
+try:
+    got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
+    check("检索两条路都关着时，没有 kb 目录是正常配置，不提醒",
+          got["config"]["kb"]["exists"] is False and not any("kb_dir" in x for x in got["warns"]), got["warns"])
 finally:
     shutil.rmtree(d, ignore_errors=True)
 

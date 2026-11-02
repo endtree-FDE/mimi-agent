@@ -225,6 +225,20 @@ def verify(base, config_path, with_doctor=True, now=None, processes=_AUTO):
     for _k, _v in cinfo["scheduled"].items():
         if not isinstance(_v, bool):
             result["warns"].append("定时输出 %s 没读成：%s" % (_k, _v))
+    import knowledge
+    import tools
+    brief = tools.kb_brief(base, cfg)
+    cinfo["kb"] = brief
+    # 资料用得上时才提醒：kb_index 或知识库检索任一开着。两个都关着时没有 kb 目录是正常配置。
+    wanted = brief["index_enabled"] or knowledge.enabled(cfg)
+    if not brief["exists"] and wanted:
+        result["warns"].append("kb_dir=%s 指到 %s，目录不存在（这个实例要用知识库检索）"
+                               % (cfg.get("kb_dir") or "kb", brief["path"]))
+    elif brief["exists"] and not brief.get("readable", True):
+        result["warns"].append("kb 目录读不了：%s" % brief.get("error"))
+    elif brief["exists"] and wanted and not brief["files"]:
+        result["warns"].append("kb 目录在，但一个能检索的文件都没有（认 %s）。迁出仓库时记得核对 kb_dir"
+                               % brief["ext"])
     result["heartbeat"] = heartbeat_info(base, now, threshold)
     if result["heartbeat"]["missing"]:
         result["fails"].append("没有 state/heartbeat，机器人可能没在跑")

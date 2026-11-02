@@ -132,6 +132,47 @@ def _fit_catalog(header, lines, budget):
     if not kept: return (header + "\n" + note)[:budget]
     return header + "\n" + "\n".join(kept) + "\n" + note
 
+def kb_brief(base, cfg):
+    """目录体检：在不在、有几个能检索到的文件。计数口径和 kb_catalog 一致（同样的后缀、同样跳过跳出目录的符号链接），
+    所以核对出来的条数就是提示词里那份目录的条数。只读，不改任何检索行为。"""
+    root = kb_root(base, cfg)
+    out = {"path": root.replace("\\", "/"), "exists": False, "files": 0, "readable": True,
+           "index_enabled": kb_index_enabled(cfg), "ext": ", ".join(sorted(_KB_EXT))}
+    if not os.path.isdir(root):
+        return out
+    out["exists"] = True
+    root_r = os.path.realpath(root)
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if d and not d.startswith(".") and d != "__pycache__")
+            try:
+                if os.path.commonpath([root_r, os.path.realpath(dirpath)]) != root_r:
+                    dirnames[:] = []
+                    continue
+            except ValueError:
+                dirnames[:] = []
+                continue
+            for fn in filenames:
+                if not fn or fn.startswith("."):
+                    continue
+                if os.path.splitext(fn)[1].lower() not in _KB_EXT:
+                    continue
+                full = os.path.join(dirpath, fn)
+                if not os.path.isfile(full):
+                    continue
+                real = os.path.realpath(full)
+                try:
+                    if os.path.commonpath([root_r, real]) != root_r:
+                        continue
+                except ValueError:
+                    continue
+                out["files"] += 1
+    except OSError as exc:
+        out["readable"] = False
+        out["error"] = str(exc)[:120]
+    return out
+
+
 def kb_catalog(base, cfg, names=()):
     """知识库目录。只含相对路径和一行标题，不含正文。跳出目录的符号链接不列。"""
     if not kb_index_enabled(cfg): return ""
