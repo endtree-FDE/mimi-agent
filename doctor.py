@@ -1,6 +1,6 @@
 # 只读诊断。不启动 event consume，不发消息，不写心跳。
 # 外部命令、进程列表、域名解析都由调用方传入，测试不必连真的飞书。
-import base64, csv, io, json, os, re, socket, subprocess
+import base64, csv, io, json, os, re, socket, subprocess, time
 import confirm_mode
 
 _SCOPE_RX = re.compile(r"\b[a-z][a-z0-9_.]*(?::[a-z0-9_.]+){1,8}\b")
@@ -386,6 +386,90 @@ def _line(level, name, info=""):
     return ("%s %s %s" % (level.ljust(4), name, info)).rstrip()
 
 
+def _pos_int(raw, default, lo, hi):
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(max(n, lo), hi)
+
+
+def restart_setting(cfg):
+    """(窗口秒数, 几次算多)。没写用 6 小时和 3 次；写 0 或负数表示这条不提醒。"""
+    alerts = (cfg or {}).get("alerts")
+    alerts = alerts if isinstance(alerts, dict) else {}
+    window = _pos_int(alerts.get("restart_window_sec"), 21600, 1, 7 * 86400)
+    after = alerts.get("restart_warn_after")
+    if after is None:
+        after = 3
+    else:
+        after = _pos_int(after, 3, 0, 1000)
+    return window, after
+
+
+def restart_ledger(path, now, window_sec, warn_after):
+    """数一数最近这段时间 consumer 退了几次。
+
+    退避会在连上之后把连续失败清零，所以「每次都自愈」＝永远看不见。这里改看累计：
+    只读 logs/events.jsonl 里 kind=consumer 的行，按 cause 分开数，不改任何重启行为。
+    ts 认不出来或没有 ts 的行不计数。只看当前文件；刚轮转过的 .1 里可能还压着几条，
+    宁可少报也不假装数全了。"""
+    if not os.path.isfile(path):
+        return ("OK", "没有 events.jsonl，还没有 consumer 退出记录")
+    total = 0
+    causes = {}
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict) or row.get("kind") != "consumer":
+                    continue
+                stamp = _stamp_epoch(row.get("ts"))
+                if stamp is None:
+                    continue
+                if now - stamp > window_sec or stamp - now > 60:
+                    continue
+                total += 1
+                cause = str(row.get("cause") or "unknown")[:24]
+                causes[cause] = causes.get(cause, 0) + 1
+    except OSError as exc:
+        return ("WARN", "events.jsonl 读不到：%s" % exc)
+    if window_sec >= 3600:
+        span = "%d 小时" % (window_sec // 3600)
+    elif window_sec >= 60:
+        span = "%d 分钟" % (window_sec // 60)
+    else:
+        span = "%d 秒" % window_sec
+    brief = "、".join("%s %d" % (cause, causes[cause]) for cause in sorted(causes, key=lambda k: -causes[k]))
+    if not total:
+        return ("OK", "近 %s 没有 consumer 退出" % span)
+    if warn_after and total >= warn_after:
+        return ("WARN", "近 %s consumer 退出 %d 次：%s。每次都自愈重连，所以断线提醒看不出来；"
+                        "具体原因看 logs/events.jsonl 里 kind=consumer 的行（stderr 尾部已打码截断）"
+                        % (span, total, brief))
+    return ("OK", "近 %s consumer 退出 %d 次：%s" % (span, total, brief))
+
+
+def _stamp_epoch(text):
+    """events.jsonl 的 ts 是 observe 写的本地时间字符串。解析不了返回 None。"""
+    if not text:
+        return None
+    if isinstance(text, (int, float)):
+        return float(text)
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return time.mktime(time.strptime(str(text)[:19], fmt))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def report(cfg, base, exe, run, processes, resolve, connect, modules, env):
     """返回 (输出行, 退出码)。有 FAIL 时退出码为 1，只有 WARN 时仍是 0。"""
     cfg = cfg or {}
@@ -509,6 +593,9 @@ def report(cfg, base, exe, run, processes, resolve, connect, modules, env):
             add(level, "processes", info)
         for level, info in judge_running_consumes(procs, base, profile, cfg, env):
             add(level, "consume", info)
+    window, warn_after = restart_setting(cfg)
+    level, info = restart_ledger(os.path.join(base, "logs", "events.jsonl"), time.time(), window, warn_after)
+    add(level, "restart", info)
     return lines, (1 if fail else 0)
 
 

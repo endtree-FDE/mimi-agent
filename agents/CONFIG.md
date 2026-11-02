@@ -432,6 +432,8 @@ python checks/check_config.py agents/example.json
 | `owner_open_ids` | `[]` | 主人的 open_id，可以多位。空着只写本机日志。`REPLACE_` 开头的会丢掉。 |
 | `unhealthy_after_sec` | `180` | 连续不健康多少秒才发第一条。`0`、负数或写错仍按 180。不要写得比 180 大，否则进程死掉时看门狗会先重启，死亡告警可能来不及发。 |
 | `repeat_sec` | `1800` | 仍未恢复时，最少隔多少秒再提醒。`0`、负数或写错仍按 1800。 |
+| `restart_window_sec` | `21600` | `--doctor` 里 `restart` 那一行的统计窗口（秒）。没写是 6 小时，最多 7 天。只影响诊断怎么说，不改重启行为。 |
+| `restart_warn_after` | `3` | 窗口内 consumer 退出够几次才 `WARN`。写 `0` 表示这条不提醒。够阈值只是 `WARN`，不判失败，也不发消息。 |
 | `local_log` | `true` | 写 `logs/alerts.log`。里面没有 open_id。 |
 | `windows_toast` | `false` | `true` 且飞书没发给每一位主人时，Windows 上再弹一次本地通知。 |
 

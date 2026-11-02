@@ -258,12 +258,14 @@
     "alerts": {
       "type": "object",
       "additionalProperties": true,
-      "description": "长连接或心跳不健康时通知主人。不写或 enabled 为 false 时不发消息。",
+      "description": "长连接或心跳不健康时通知主人。不写或 enabled 为 false 时不发消息。restart_* 只管诊断里的退出累计，不影响提醒发送。",
       "properties": {
         "enabled": {"type": "boolean"},
         "owner_open_ids": {"type": "array", "items": {"type": "string"}},
         "unhealthy_after_sec": {"type": "number", "minimum": 0},
         "repeat_sec": {"type": "number", "minimum": 0},
+        "restart_window_sec": {"type": "number", "minimum": 0},
+        "restart_warn_after": {"type": "number", "minimum": 0},
         "local_log": {"type": "boolean"},
         "windows_toast": {"type": "boolean"}
       }

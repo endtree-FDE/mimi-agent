@@ -448,5 +448,63 @@ check("锁读不到时看门狗照常保护进程，坏文件不能变成永久�
       and "Stop-Process" not in _block and "Remove-Item" in _block
       and "bot.lock" not in _block)
 
+import shutil, tempfile, time as _time
+
+_led = tempfile.mkdtemp(prefix="agentbot_restart_ledger_")
+_ev_path = os.path.join(_led, "logs", "events.jsonl")
+_now = _time.time()
+
+
+def _ts(offset):
+    return _time.strftime("%Y-%m-%dT%H:%M:%S", _time.localtime(_now - offset))
+
+
+def _write_ledger(rows):
+    os.makedirs(os.path.dirname(_ev_path), exist_ok=True)
+    with open(_ev_path, "w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write((row if isinstance(row, str) else json.dumps(row, ensure_ascii=False)) + "\n")
+
+
+check("没有 events.jsonl 时说没记录，不报警",
+      doctor.restart_ledger(os.path.join(_led, "logs", "missing.jsonl"), _now, 21600, 3)[0] == "OK")
+_write_ledger([{"kind": "consumer", "rc": 3, "cause": "network", "ts": _ts(60)},
+               {"kind": "consumer", "rc": 3, "cause": "dns", "ts": _ts(120)},
+               {"kind": "consumer", "rc": 1, "cause": "network", "ts": _ts(300)},
+               {"kind": "consumer", "rc": 1, "cause": "auth", "ts": _ts(3600 * 30)},
+               {"kind": "tool", "tool": "docs_read", "ts": _ts(90)},
+               {"kind": "consumer", "rc": 1, "cause": "dns"},
+               {"kind": "consumer", "rc": 1, "cause": "dns", "ts": "上个月"},
+               {"kind": "consumer", "rc": 1, "cause": "dns", "ts": _ts(-3600)},
+               "不是 JSON"])
+_level, _info = doctor.restart_ledger(_ev_path, _now, 21600, 3)
+check("窗口内的退出按原因分开数，够三条才提醒",
+      _level == "WARN" and "3 次" in _info and "network 2" in _info and "dns 1" in _info
+      and "6 小时" in _info, _info)
+check("没有 ts、ts 认不出来、时钟超前的行都不计数",
+      "auth" not in _info and _info.count("dns 1") == 1, _info)
+_write_ledger([{"kind": "consumer", "rc": 3, "cause": "dns", "ts": _ts(60)},
+               {"kind": "consumer", "rc": 3, "cause": "dns", "ts": _ts(120)}])
+check("不到三条只报次数，不提醒",
+      doctor.restart_ledger(_ev_path, _now, 21600, 3)[0] == "OK"
+      and "2 次" in doctor.restart_ledger(_ev_path, _now, 21600, 3)[1], _info)
+check("没写配置时用 6 小时和 3 次，写 0 表示这条不提醒",
+      doctor.restart_setting({}) == (21600, 3)
+      and doctor.restart_setting({"alerts": {"restart_warn_after": 0}})[1] == 0
+      and doctor.restart_setting({"alerts": {"restart_window_sec": "错"}}) == (21600, 3)
+      and doctor.restart_setting({"alerts": {"restart_window_sec": 999999999}})[0] == 7 * 86400)
+_write_ledger([{"kind": "consumer", "rc": 3, "cause": "dns", "ts": _ts(60)}] * 9)
+check("窗口调小后同样这些行就不算多",
+      doctor.restart_ledger(_ev_path, _now, 600, 3)[0] == "WARN"
+      and doctor.restart_ledger(_ev_path, _now, 30, 3)[0] == "OK")
+_os_lines, _os_code = doctor.report(cfg_min, _led, ["lark-cli"], run, lambda: [],
+                                    lambda host: [("1.2.3.4", 443)], lambda host, port: True,
+                                    {"pypdf": True, "openpyxl": False, "PIL": True}, {"NO_PROXY": "open.feishu.cn"})
+_os_text = "\n".join(_os_lines)
+check("诊断里带上这一行，核对脚本才带得出来",
+      "restart" in [ln.split()[1] for ln in _os_lines] and "WARN restart" in _os_text
+      and _os_code == 0, _os_text)
+shutil.rmtree(_led, ignore_errors=True)
+
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)

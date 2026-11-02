@@ -24,6 +24,12 @@
 - 打开后，到点往 `broadcast.chat_ids` 里、并且已经在服务范围内的每个群发一条。每个群每个本地日最多一条，记在 `state/broadcast_state.json`，和早晨摘要的名额分开。重启不重发。发送明确失败会放掉名额；超时或看不懂结果就保持占坑。
 - 不写 `source` 时，`urls`（站点健康）、`body_file`（例如待审名单）、`command` 的标准输出和 `text` 可以进同一条。命令是参数数组，不经过 shell，有超时，环境里不带密钥。公网地址只取状态码和限长摘录。不点名所有人。演练、`--check` 和 `--doctor` 不发。AI 资讯抓取不在这一版。转塘艺讯这类群保持 `digest.enabled` 为 false，只开播报。见 [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md)。
 
+- 部署核对：`python checks\verify_deploy.py --base <目录>` 一条命令给出机器可读的结论（HEAD 与部署标注 tag、心跳年龄、进程拓扑、配置哈希与定时输出、`deploy.lock`、`--doctor` 每一行）。全程只读，不发消息、不写心跳、不动进程。结论 `PASS` 退出 0，`FAIL` 退出 1，参数或目录不对退出 2。`agents` 里只有一个 json 时会自动选中。见 [docs/部署后验证.md](docs/部署后验证.md)。
+- 升级或回滚期间在实例目录放 `state\deploy.lock`（`created=<Unix 秒>`，可再写 `ttl=<秒>`，默认 900 秒），看门狗读到就不重启也不发提醒；锁过期自动恢复保护，锁文件读坏也照常重启。`scripts\botproc.ps1` 新增 `Get-DeployLock` / `Set-DeployLock` / `Clear-DeployLock`。不用再停计划任务，见 [docs/升级已有智能体.md](docs/升级已有智能体.md)。
+- consumer 每次真实退出都在 `logs\events.jsonl` 记一行 `kind=consumer`：事件名、退出码、结束原因、按日志归类的原因（域名解析失败算 `dns`，不再被算成鉴权）和打码截断后的 stderr 尾部。`--doctor` 因此新增一行 `restart`，按窗口累计退出次数并分开数原因：连续失败计数会在连上之后清零，只看当场那一次永远看不见「一天重启二十次」。够阈值只是 `WARN`，不判失败。
+- `/状态` 在早晨摘要、播报、用量周报三项都关着时明说一句「这个实例不会主动发任何定时消息」。以前那几行直接不出现，很容易被读成漏写。
+- 部署核对还会提醒两件事，都不改结论：这个 HEAD 上没有标注 tag、或者工作区还有未提交改动（说不清这台跑的是哪版）。
+
 ### 修复
 
 - Windows 上播报的 `command` 可以启动 `C:\...\python.exe` 这种解释器。盘符路径不再被当成密钥挡住。参数或路径里如果还有密钥、手机号或客户名，仍然不会启动。
