@@ -1,7 +1,7 @@
 # 长连接是不是还活着。安静的群不算断线：没有新消息时什么都不做。
 # 只有进程退出、对方日志写明连接断了，或者墙上时钟比单调时钟多跳了一截（休眠或唤醒），才重连。
 # 要结束的是我们拉起的那一个进程。创建时间对不上就不发信号，避免编号被别人复用。
-import os, subprocess, threading, time
+import os, re, subprocess, threading, time
 
 _DOWN = (
     "feishu-websocket: disconnected",
@@ -56,6 +56,34 @@ def classify_log(line):
     if any(mark in text for mark in _DOWN):
         return "down"
     return ""
+
+
+_SUBTYPE = re.compile(r'"subtype"\s*:\s*"([a-z0-9_.-]{1,40})"', re.IGNORECASE)
+# 顺序有意义：域名解析失败时 lark-cli 也会写成「拿不到 token」，先认 dns 才不会被算成鉴权。
+_CAUSE_MARKS = (
+    ("dns", ("no such host", "getaddrinfo", "name resolution", "server misbehaving", "lookup")),
+    ("not_subscribed", ("not subscribed", "requires callbacks")),
+    ("auth", ("token_missing", "invalid access token", "unauthorized", "forbidden", "permission",
+              "99991663", "99991668")),
+    ("network", ("connection reset", "broken pipe", "timed out", "i/o timeout", "timeout",
+                 "connection refused", "network is unreachable", "use of closed network connection", "eof")),
+)
+
+
+def exit_subtype(text):
+    """lark-cli 错误 JSON 里的 subtype 原样当作错误码。没有就返回空字符串。"""
+    found = _SUBTYPE.search(text or "")
+    return found.group(1).lower() if found else ""
+
+
+def exit_cause(text):
+    """把 consumer 退出前的原文归成几种可统计的原因，认不出来返回 unknown。
+    只看关键字，不解释语义：真正的原因还要读那一行错误原文。"""
+    low = (text or "").lower()
+    for name, marks in _CAUSE_MARKS:
+        if any(mark in low for mark in marks):
+            return name
+    return "unknown"
 
 
 def restart_delay(failures, cap=60):

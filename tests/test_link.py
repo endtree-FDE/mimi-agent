@@ -187,6 +187,17 @@ check("卡片进程断开或连上都不改变收消息的健康状态",
 isolated.note("im.message.receive_v1", "feishu-websocket: disconnected")
 msg_up, msg_since = isolated.link_snapshot()
 check("只有收消息的日志写明断开，健康状态才变成断线", msg_up is False and msg_since != 1000)
+
+DNS_TAIL = ('{\n  "subtype": "token_missing",\n  "message": "resolve tenant access token: Post '
+            '\\"https://accounts.feishu.cn/oauth/v3/token\\": dial tcp: lookup accounts.feishu.cn: no such host"\n}')
+check("域名解析失败算 dns，不当成鉴权问题", feishu_link.exit_cause(DNS_TAIL) == "dns", feishu_link.exit_cause(DNS_TAIL))
+check("subtype 原样留作错误码", feishu_link.exit_subtype(DNS_TAIL) == "token_missing", feishu_link.exit_subtype(DNS_TAIL))
+check("没订阅卡片回调认得出来",
+      feishu_link.exit_cause("failed_precondition: EventKey card.action.trigger requires callbacks "
+                             "not subscribed in console") == "not_subscribed")
+check("连接类原因各归一类，认不出来算 unknown",
+      feishu_link.exit_cause("websocket: i/o timeout") == "network"
+      and feishu_link.exit_cause("boom") == "unknown" and feishu_link.exit_subtype("boom") == "")
 check("没订阅的日志本身不是断线",
       feishu_link.classify_log("failed_precondition: requires callbacks not subscribed in console") == "")
 
@@ -293,6 +304,19 @@ try:
     out = (r.stdout or "") + (r.stderr or "")
     check("收消息进程退出仍会重连，并把健康状态记成断线",
           r.returncode == 0 and "MSG_JOINED 1" in out and "MSG_CALLS 2" in out and "MSG_UP 0" in out, out)
+    rows = []
+    ev_path = os.path.join(crash, "logs", "events.jsonl")
+    if os.path.isfile(ev_path):
+        for raw in open(ev_path, encoding="utf-8").read().splitlines():
+            try:
+                rows.append(json.loads(raw))
+            except Exception:
+                pass
+    exits = [x for x in rows if x.get("kind") == "consumer"]
+    check("consumer 退出在 events.jsonl 里留一行账：事件名、退出码、原因和 stderr 尾部",
+          bool(exits) and all(x.get("event") == feishu_link.MESSAGE_EVENT and x.get("rc") == 1
+                              and x.get("reason") == "exit" and "boom" in str(x.get("tail"))
+                              and x.get("cause") == "unknown" for x in exits), exits)
 finally:
     import shutil
     shutil.rmtree(unsub, ignore_errors=True)

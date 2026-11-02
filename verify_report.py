@@ -204,11 +204,13 @@ def judge_rotation(logs):
 
 
 def judge_events(tail):
-    """只报工具名和错误码。不打印 err，避免把残留的原文打出来。"""
+    """只报工具名和错误码，consumer 退出只报事件名、退出码和原因分类。
+    不打印 err 或 tail，避免把残留的原文打出来。"""
     lines = as_list(tail)
     if not lines:
         return [("WARN", "events", "没有 events.jsonl 或文件是空的。刚启动、还没答过题时正常")]
     counts = {}
+    exits = {}
     bad = 0
     for raw in lines:
         text = (raw or "").strip()
@@ -222,6 +224,11 @@ def judge_events(tail):
         if not isinstance(row, dict):
             bad += 1
             continue
+        if row.get("kind") == "consumer":
+            key = (str(row.get("event") or "?"), str(row.get("rc")), str(row.get("cause") or "unknown"),
+                   str(row.get("code") or ""))
+            exits[key] = exits.get(key, 0) + 1
+            continue
         if row.get("kind") == "tool":
             code = str(row.get("code") or "")
             if code and code != "0":
@@ -233,7 +240,11 @@ def judge_events(tail):
     rows = []
     if bad:
         rows.append(("WARN", "events", "有 %d 行不是 JSON" % bad))
-    if not counts:
+    for (event, rc, cause, code) in sorted(exits):
+        note = (" 错误码 %s" % code) if code else ""
+        rows.append(("WARN", "events", "consumer=%s 退出码 %s 原因 %s%s 共 %d 条（最近 %d 行）"
+                     % (event, rc, cause, note, exits[(event, rc, cause, code)], len(lines))))
+    if not counts and not exits:
         rows.append(("OK", "events", "最近 %d 行没有错误码" % len([ln for ln in lines if str(ln).strip()])))
         return rows
     for (tool, code) in sorted(counts):

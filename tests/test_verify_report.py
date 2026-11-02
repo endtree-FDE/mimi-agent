@@ -144,6 +144,15 @@ check("最近错误码按工具汇总，不把 err 原文打出来",
       any(level == "WARN" and "docs_read" in info and "99991672" in info and "共 1 条" in info for level, _n, info in ev_rows)
       and "13812345678" not in ev_text and "不是 JSON" in ev_text)
 
+exit_line = json.dumps({"kind": "consumer", "event": "im.message.receive_v1", "rc": 3, "reason": "exit",
+                        "cause": "dns", "code": "token_missing", "tail": "手机号 13812345678 打不开域名"})
+ex_rows = verify_report.build_report({"processes": [], "bots": [bot(A, None, None, events=[exit_line, exit_line])]})
+ex_text = verify_report.render(ex_rows)
+check("consumer 退出按事件名、退出码、原因汇总，不打错误原文",
+      any(level == "WARN" and "im.message.receive_v1" in info and "退出码 3" in info and "dns" in info
+          and "token_missing" in info and "共 2 条" in info for level, _n, info in ex_rows)
+      and "13812345678" not in ex_text and "打不开域名" not in ex_text, ex_text)
+
 doc_fail = {"processes": [], "bots": [], "doctors": [{"label": "app-a", "code": 1, "output": "FAIL scopes 缺少 im:message:send_as_bot"}]}
 doc_rows = verify_report.build_report(doc_fail)
 check("诊断里的 FAIL 让退出失败",

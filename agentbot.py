@@ -2595,6 +2595,17 @@ def _poke_consumer(proc, created, seen, down):
         else:
             log.warning("skip consumer pid %s (not the process we started)", proc.pid)
         return
+def _note_consumer_exit(event_key, rc, reason, err_text):
+    """consumer 退出后在 logs/events.jsonl 留一行机器可读的账：退出码、结束原因、错误码和 stderr 尾部。
+    出问题时不用再从 bot.log 里那句给人看的警告反推。尾部按 observe 的规则打码并截断。"""
+    kept = [line for line in (err_text or "").splitlines() if line.strip()]
+    tail = "\n".join(kept[-6:])
+    try:
+        OBS.write({"kind": "consumer", "event": str(event_key), "rc": int(rc) if rc is not None else None,
+                   "reason": reason, "cause": feishu_link.exit_cause(tail),
+                   "code": feishu_link.exit_subtype(tail), "tail": tail})
+    except Exception as exc:
+        log.warning("consumer exit note failed: %s", exc)
 def _consume_forever(event_key):
     primary = threading.current_thread() is threading.main_thread()
     while not lifecycle.SHUTDOWN.is_set():
@@ -2659,6 +2670,7 @@ def _consume_forever(event_key):
         rc = p.wait()
         err_thread.join(timeout=1)
         err_text = "".join(err_lines) + "".join(out_lines)
+        _note_consumer_exit(event_key, rc, reason, err_text)
         if event_key == confirm_mode.CARD_EVENT and reason != "wake" and confirm_mode.unsubscribed_exit(rc, err_text):
             log.warning("consumer %s not subscribed rc=%s, not restarting this run", event_key, rc)
             _give_up_card(err_text or ("rc=%s" % rc))
