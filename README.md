@@ -236,6 +236,7 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `usage.py` | 用量周报。默认关。每周私聊一次，重启不重发 |
 | `feature_switch.py` | 主人在私聊里开关功能。见 [docs/新手开关功能.md](docs/新手开关功能.md) |
 | `scripts/reload.ps1` | 改完开关后平滑重启：先停，确认没有第二个接收进程，再启动 |
+| `checks/verify_deploy.py` | 升级或回滚之后一条命令拿机器可读结论（版本、心跳、拓扑、配置、kb、诊断）。只读，不发消息也不动进程。见 [docs/部署后验证.md](docs/部署后验证.md) |
 | `docs/断线提醒与晨报.md` | 断线提醒和早晨摘要怎么开，以及飞书要哪些权限 |
 | `docs/用量周报.md` | 用量周报怎么开，统计什么，什么不会写进去 |
 | `docs/调用记录.md` | 每轮调用链写在本机，主人私聊可看，周报只加合计 |
