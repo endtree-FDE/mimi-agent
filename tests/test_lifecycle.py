@@ -70,17 +70,16 @@ check("冲突列表：记事本复用编号则不拦截", proc_identity.conflict
 check("冲突列表：看起来还是 agentbot 则拦截", proc_identity.conflict_blocks(ours) is True)
 check("冲突列表：活着但读不到命令行则拦截",
       proc_identity.conflict_blocks({"pid": 9, "created": "1", "cmdline": "", "cwd": ""}) is True)
-# 线上真出过的事：v2 的 pid 文件只有一行进程号，那个号后来分给了本目录的新进程。
-v2_pidfile = {"pid": 60684, "created": "", "base": ""}
-our_new = {"pid": 60684, "created": "999",
-           "cmdline": r"python C:\Users\endTree\mumu-agent-v3\agentbot.py C:\Users\endTree\mumu-agent-v3\agents\mumu.json consume",
-           "cwd": r"C:\Users\endTree\mumu-agent-v3"}
+# 线上真出过的事：旧目录的 pid 文件只有一行进程号，那个号后来分给了本目录的新进程。
+own_base = r"C:\bots\mumu-v3"
+old_pidfile = {"pid": 4242, "created": "", "base": ""}
+our_new = {"pid": 4242, "created": "999",
+           "cmdline": r"python C:\bots\mumu-v3\agentbot.py C:\bots\mumu-v3\agents\v3.json consume",
+           "cwd": own_base}
 check("冲突列表：pid 文件里的号就是我们自己，不能把自己当成旧实例",
-      proc_identity.conflict_blocks(our_new, v2_pidfile, self_pid=60684,
-                                    own_base=r"C:\Users\endTree\mumu-agent-v3") is False)
+      proc_identity.conflict_blocks(our_new, old_pidfile, self_pid=4242, own_base=own_base) is False)
 check("冲突列表：那个进程是本目录的 agentbot（比如子进程），不是别的实例",
-      proc_identity.conflict_blocks(our_new, v2_pidfile, self_pid=1,
-                                    own_base=r"C:\Users\endTree\mumu-agent-v3") is False)
+      proc_identity.conflict_blocks(our_new, old_pidfile, self_pid=1, own_base=own_base) is False)
 check("冲突列表：pid 文件写了创建时间且对不上，就是号码被复用",
       proc_identity.conflict_blocks(dict(ours, created="200"), {"pid": 42, "created": "100", "base": base},
                                     self_pid=1, own_base=base) is False)
