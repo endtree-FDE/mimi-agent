@@ -332,9 +332,12 @@ stop_call = text.find('Join-Path $PSScriptRoot "stop.ps1"')
 start_call = text.find('Join-Path $PSScriptRoot "start.ps1"')
 check("重启脚本先停再查再启动，且不另写一套结束进程",
       stop_call >= 0 and start_call > stop_call and "Test-OurAgent" in text
-      and "Test-ReceiverLeft" in text and "exit 3" in text and text.find("exit 3") < start_call
+      and "Get-ReceiverLeft" in text and "exit 3" in text and text.find("exit 3") < start_call
       and "Start-Process" not in text and "taskkill" not in text.lower() and "&&" not in text and "??" not in text
       and "Stop-Process" not in text and "Restore-SwitchBackup" in text)
+check("重启脚本按秒等，不是按轮数；拒绝时说出是谁还占着",
+      "[int]$StopWaitSec = 45" in text and "AddSeconds" in text and "for ($i = 0" not in text
+      and "refused: receiver still running (pid" in text, text)
 argv = feature_switch.reloader_argv(FW, os.path.join(FW, "agents", "example.json"))
 joined = " ".join(argv)
 direct = "agentbot.py" in joined
