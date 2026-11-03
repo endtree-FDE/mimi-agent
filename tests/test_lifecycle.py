@@ -70,6 +70,26 @@ check("冲突列表：记事本复用编号则不拦截", proc_identity.conflict
 check("冲突列表：看起来还是 agentbot 则拦截", proc_identity.conflict_blocks(ours) is True)
 check("冲突列表：活着但读不到命令行则拦截",
       proc_identity.conflict_blocks({"pid": 9, "created": "1", "cmdline": "", "cwd": ""}) is True)
+# 线上真出过的事：v2 的 pid 文件只有一行进程号，那个号后来分给了本目录的新进程。
+v2_pidfile = {"pid": 60684, "created": "", "base": ""}
+our_new = {"pid": 60684, "created": "999",
+           "cmdline": r"python C:\Users\endTree\mumu-agent-v3\agentbot.py C:\Users\endTree\mumu-agent-v3\agents\mumu.json consume",
+           "cwd": r"C:\Users\endTree\mumu-agent-v3"}
+check("冲突列表：pid 文件里的号就是我们自己，不能把自己当成旧实例",
+      proc_identity.conflict_blocks(our_new, v2_pidfile, self_pid=60684,
+                                    own_base=r"C:\Users\endTree\mumu-agent-v3") is False)
+check("冲突列表：那个进程是本目录的 agentbot（比如子进程），不是别的实例",
+      proc_identity.conflict_blocks(our_new, v2_pidfile, self_pid=1,
+                                    own_base=r"C:\Users\endTree\mumu-agent-v3") is False)
+check("冲突列表：pid 文件写了创建时间且对不上，就是号码被复用",
+      proc_identity.conflict_blocks(dict(ours, created="200"), {"pid": 42, "created": "100", "base": base},
+                                    self_pid=1, own_base=base) is False)
+check("冲突列表：真的还是另一个目录的 agentbot 则继续拦截",
+      proc_identity.conflict_blocks(other, {"pid": 42, "created": "", "base": ""},
+                                    self_pid=1, own_base=base) is True)
+check("冲突列表：本目录名是别的目录前缀时仍算别的实例",
+      proc_identity.conflict_blocks(prefix, {"pid": 42, "created": "", "base": ""},
+                                    self_pid=1, own_base=base) is True)
 
 text = proc_identity.format_lock(42, "100", base)
 parsed = proc_identity.parse_lock(text)
@@ -318,6 +338,46 @@ try:
     code, out = _py(conflict_src, dict(_env(_cfg(work)), PF=pf))
     check("冲突列表里仍是 agentbot 时拒绝启动，但不结束它",
           "EXIT 4" in out and "REFUSED" in out and _alive(holder), out)
+finally:
+    if holder and _alive(holder):
+        holder.kill(); holder.wait(timeout=5)
+
+# 线上真出过一次：旧目录的 pid 文件里只有编号，那个编号后来分给了正在启动的自己。
+self_pid_src = r'''
+import os, sys
+sys.argv = ["agentbot.py", os.environ["CFG"], "--dry-run"]
+import agentbot
+agentbot.CFG["conflict_pidfiles"] = [os.environ["PF"]]
+open(os.environ["PF"], "w", encoding="utf-8").write(str(os.getpid()) + "\n")
+try:
+    agentbot.check_conflicts()
+    print("NOBLOCK")
+except SystemExit as e:
+    print("EXIT", e.code)
+'''
+work = None
+try:
+    work = tempfile.mkdtemp(prefix="agentbot_cf_")
+    pf = os.path.join(work, "old.pid")
+    code, out = _py(self_pid_src, dict(_env(_cfg(work)), PF=pf))
+    check("pid 文件里的编号就是我们自己时不拒绝启动", code == 0 and "NOBLOCK" in out, out)
+finally:
+    if work:
+        shutil.rmtree(work, ignore_errors=True)
+
+holder = None
+other = None
+try:
+    work = tempfile.mkdtemp(prefix="agentbot_cf_")
+    other = tempfile.mkdtemp(prefix="agentbot_cfbot_")
+    open(os.path.join(other, "agentbot.py"), "w", encoding="utf-8").write("import time\ntime.sleep(60)\n")
+    holder = subprocess.Popen([sys.executable, os.path.join(other, "agentbot.py")], cwd=other)
+    time.sleep(0.2)
+    pf = os.path.join(work, "old.pid")
+    open(pf, "w", encoding="utf-8").write("%s\ncreated=1\n" % holder.pid)
+    code, out = _py(conflict_src, dict(_env(_cfg(work)), PF=pf))
+    check("pid 文件写了创建时间且和现在的进程对不上，就是编号被复用，不拒绝",
+          code == 0 and "NOBLOCK" in out and _alive(holder), out)
 finally:
     if holder and _alive(holder):
         holder.kill(); holder.wait(timeout=5)

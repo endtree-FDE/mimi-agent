@@ -134,8 +134,12 @@ def check_conflicts():
         except OSError: continue
         lock = proc_identity.parse_lock(text)
         if not lock: continue
-        if proc_identity.conflict_blocks(proc_identity.snapshot(lock["pid"])):
+        snap = proc_identity.snapshot(lock["pid"])
+        if proc_identity.conflict_blocks(snap, lock, self_pid=os.getpid(), own_base=BASE):
             log.error("REFUSED: conflicting instance still running (pid %s from %s)", lock["pid"], pf); sys.exit(4)
+        elif snap:
+            # 那个编号还活着，但不是写下这个 pid 文件的进程。留一行，否则下次排查只能看到拒绝。
+            log.warning("stale pidfile %s: pid %s 是别的进程（号码已复用）或本目录自己的进程，不拦", pf, lock["pid"])
 
 # ---------- 外部命令 ----------
 def lark_exe():

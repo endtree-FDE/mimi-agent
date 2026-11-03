@@ -27,7 +27,7 @@ if (Test-Path $lock) {
 }
 
 # 配置里点名的旧版 pid 还活着：只有它看起来还是某个 agentbot 才拒绝启动。
-# 编号被别的程序复用则不拒绝，也不结束那个进程。读不到命令行时宁可拒绝，避免同一个应用开两个接收进程。
+# 编号被别的程序复用则不拒绝，也不结束那个进程。编号若已经分给本目录自己的 agentbot（或它的子进程）同样不拒绝。读不到命令行时宁可拒绝，避免同一个应用开两个接收进程。
 foreach ($pf in @($cfg.conflict_pidfiles)) {
   if (-not $pf) { continue }
   $p = [string]$pf
@@ -37,6 +37,8 @@ foreach ($pf in @($cfg.conflict_pidfiles)) {
   if ($opid -notmatch '^\d+$') { continue }
   $oldProc = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$opid)" -ErrorAction SilentlyContinue
   if (-not $oldProc) { continue }
+  # 那个编号若已是本目录的 agentbot（自己或自己的子进程），就不是旧实例，别把自己当成对手。
+  if (Test-OurAgent $oldProc $base) { "stale pidfile ${pf}: pid $opid 是本目录自己的进程，不拦"; continue }
   $cl = [string]$oldProc.CommandLine
   if ($cl -and $cl -notmatch '(?i)agentbot\.py') { continue }
   "REFUSED: conflicting instance still running (pid $opid from $pf)"; exit 4

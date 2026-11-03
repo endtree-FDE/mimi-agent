@@ -154,15 +154,27 @@ def app_lock_held(lock, snap):
     return False
 
 
-def conflict_blocks(snap):
-    """conflict_pidfiles 里的旧进程。只有它看起来还是某个 agentbot，才拒绝启动。PID 被别的程序复用则不拒绝，也不结束它。"""
+def conflict_blocks(snap, lock=None, self_pid=None, own_base=None):
+    """conflict_pidfiles 里的旧进程。只有它看起来还是别的实例，才拒绝启动。
+
+    三种情况放行，都不结束那个进程：pid 文件里的号码就是我们自己；号码的创建时间和
+    现在这个进程对不上（Windows 会把退掉的号码分给别人）；这个进程其实是本目录的
+    agentbot（自己的子进程，或重启后的自己）。读不到命令行时仍按老规矩拦。"""
     if not snap:
+        return False
+    if lock and self_pid and int(lock.get("pid") or 0) == int(self_pid):
+        return False
+    if lock and lock.get("created") and snap.get("created") and str(lock["created"]) != str(snap["created"]):
         return False
     cmd = snap.get("cmdline") or ""
     cwd = snap.get("cwd") or ""
     if not cmd and not cwd:
         return True
-    return "agentbot.py" in cmd.lower()
+    if "agentbot.py" not in cmd.lower():
+        return False
+    if own_base and is_our_agent(cmd, cwd, own_base):
+        return False
+    return True
 
 
 def _alive(pid):

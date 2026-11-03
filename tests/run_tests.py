@@ -1243,8 +1243,9 @@ _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("--check：没有旧键时不提示", "HINT" not in _co and "OK   fake" in _co, _co)
 _ps = open(os.path.join(FW, "scripts", "start.ps1"), encoding="utf-8-sig").read()
 _bp = open(os.path.join(FW, "scripts", "botproc.ps1"), encoding="utf-8-sig").read()
-check("start.ps1：本 profile 残留 event 进程会结束，conflict_pidfiles 还活着则拒绝",
+check("start.ps1：本 profile 残留 event 进程会结束，conflict_pidfiles 还活着则拒绝，但本目录自己的 pid 不拦",
       "conflict_pidfiles" in _ps and "REFUSED" in _ps and "Stop-LarkLeftovers" in _ps
+      and "Test-OurAgent $oldProc $base" in _ps
       and "event\\s+(consume|_bus)" in _bp and "--profile" in _bp and "Test-LarkLeftover" in _bp
       and "tasklist" not in _ps.lower() and "ParentProcessId" not in _ps, _ps)
 
