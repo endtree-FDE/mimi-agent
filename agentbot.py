@@ -2696,6 +2696,14 @@ def _consume_forever(event_key):
             if action != "wait": break
             time.sleep(0.5)
         if action != "restart":
+            # 收尾这一趟也要等 stderr 抽干。一返回，主线程可能立刻退出解释器，
+            # 还在写日志的抽读线程会撞上 stdout 锁，把一次正常收尾变成致命错误。
+            if p.poll() is None:
+                try:
+                    p.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    log.warning("consumer %s pid %s still alive at shutdown", event_key, p.pid)
+            err_thread.join(timeout=5)
             break
         rc = p.wait()
         err_thread.join(timeout=1)

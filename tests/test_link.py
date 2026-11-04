@@ -268,6 +268,7 @@ print("MSG_UP", int(bool(up)))
 '''
 unsub = tempfile.mkdtemp(prefix="agentbot_unsub_")
 crash = tempfile.mkdtemp(prefix="agentbot_crash_")
+linger = None
 try:
     open(os.path.join(unsub, "exit2.py"), "w", encoding="utf-8").write(
         "import sys\n"
@@ -317,10 +318,59 @@ try:
           bool(exits) and all(x.get("event") == feishu_link.MESSAGE_EVENT and x.get("rc") == 1
                               and x.get("reason") == "exit" and "boom" in str(x.get("tail"))
                               and x.get("cause") == "unknown" for x in exits), exits)
+    # 收尾不能留一个还在写日志的线程：主线程一退，解释器开始收尾，它随后那笔写入会撞上
+    # 「Fatal Python error: _enter_buffered_busy ... possibly due to daemon threads」，
+    # 进程退出码变成非 0，一次正常收尾就被看门狗读成崩溃。windows CI 上真挂过一次。
+    linger_src = r'''
+import os, sys, threading, time
+sys.argv = ["agentbot.py", os.environ["CFG"], "--dry-run"]
+import agentbot, feishu_link
+inside = set()      # 这一刻正在写日志的线程
+returned = []       # 收尾那一刻还留在里面的：循环已返回，却有线程还要往 stdout 写
+class SlowLog:
+    """把一次日志写入放慢 0.6 秒，好让正在写的线程被点出来。"""
+    def _w(self, msg, *a):
+        me = threading.current_thread().name
+        inside.add(me)
+        time.sleep(0.6)
+        inside.discard(me)
+    info = warning = error = exception = _w
+    def debug(self, msg, *a):
+        pass
+agentbot.log = SlowLog()
+calls = []
+def argv(key):
+    calls.append(key)
+    if len(calls) >= 2:
+        agentbot.lifecycle.request_shutdown(agentbot.STATE)
+    return [sys.executable, os.environ["FAKE"]]
+agentbot.consume_argv = argv
+agentbot._LINK.mark_link(True, now=5000)
+def run():
+    agentbot._consume_forever(feishu_link.MESSAGE_EVENT)
+    returned.append(sorted(inside - {threading.current_thread().name}))
+worker = threading.Thread(target=run)
+worker.start()
+worker.join(25)
+print("ROUND_CALLS", len(calls))
+print("STILL_WRITING", len(returned[0]) if returned else -1)
+'''
+    linger = tempfile.mkdtemp(prefix="agentbot_linger_")
+    cfg["base_dir"] = linger
+    path = os.path.join(linger, "bot.json")
+    json.dump(cfg, open(path, "w", encoding="utf-8"), ensure_ascii=False)
+    env["CFG"] = path
+    r = subprocess.run([sys.executable, "-c", linger_src], cwd=FW, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=env, timeout=60)
+    out = (r.stdout or "") + (r.stderr or "")
+    check("收尾时等这一路的 stderr 抽干：循环返回后不再有别的线程往 stdout 写",
+          "ROUND_CALLS 2" in out and "STILL_WRITING 0" in out, out)
 finally:
     import shutil
     shutil.rmtree(unsub, ignore_errors=True)
     shutil.rmtree(crash, ignore_errors=True)
+    if linger:
+        shutil.rmtree(linger, ignore_errors=True)
 
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)
