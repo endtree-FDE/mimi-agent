@@ -28,7 +28,8 @@
 - `skills.py` + `skills/*/SKILL.md` — 技能目录与触发词，默认关。
 - `knowledge.py` / `kb_sync.py` — 分群知识库检索与待审同步，默认关。
 - 定时任务（全部默认关）：`health_alert.py` 断线提醒、`digest.py` 晨报、
-  `broadcast.py` 播报（不调模型）、`usage.py` 用量周报。
+  `broadcast.py` 播报（不调模型）、`usage.py` 用量周报、`intake.py` 接待桥（只进不出，
+  模块里根本没有发送通路）、`intake_notify.py` 意向待看提醒（私聊主人，本人回确认码才进群）。
 - `lifecycle.py` 单实例锁与优雅停机；`observe.py` / `calltrace.py` 本机脱敏日志；
   `doctor.py` 只读诊断；`feature_switch.py` 主人私聊开关功能；
   `setup_wizard.py` / `setup_agent.py` 配置生成。
