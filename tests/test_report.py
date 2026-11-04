@@ -1,4 +1,5 @@
 # 用量周报。默认关。不发送时也能导出。周报里没有原文和编号。
+# win-path-fixture：按扩展名分类的用例，盘符只是字符串的一部分。
 import csv, io, json, logging, os, shutil, subprocess, sys, tempfile, time
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -1,4 +1,5 @@
 # 运维简报。默认关。一个群一份只读正文，到点只发一条。不调用模型，不点名所有人。
+# win-path-fixture：播报的 command 用 Windows 解释器路径，测的是密钥判定放行盘符。
 import datetime, json, os, shutil, subprocess, sys, tempfile
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

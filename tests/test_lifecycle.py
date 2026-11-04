@@ -1,4 +1,5 @@
 # 单实例锁和优雅停机。不连飞书，不结束身份对不上的进程。
+# win-path-fixture：假进程表和假锁文件里的 Windows 命令行；停机与单实例的判定看的是形状。
 import json, os, shutil, subprocess, sys, tempfile, time
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

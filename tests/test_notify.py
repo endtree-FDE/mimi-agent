@@ -1,4 +1,5 @@
 # 断线提醒和早晨摘要。默认关。发送走消息接口，不走事件长连接。
+# win-path-fixture：假命令行数组，测的是参数怎么传给子进程，不做路径拼接。
 import datetime, json, os, shutil, subprocess, sys, tempfile, time
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

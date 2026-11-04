@@ -1,4 +1,5 @@
 # checks/verify_deploy.py 的离线用例：只喂临时目录和假进程表，不联网、不起进程、不调 lark-cli。
+# win-path-fixture：假进程表里的命令行。要「一个绝对路径」的用例一律走 tempfile.gettempdir()。
 import json, os, shutil, sys, tempfile, time
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

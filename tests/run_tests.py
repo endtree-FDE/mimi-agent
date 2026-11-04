@@ -1,4 +1,5 @@
 # 离线测试（不连飞书、不调 cursor-agent）：python3 tests/run_tests.py
+# win-path-fixture：盘符和 .. 的拒绝用例：要的就是 Windows 形状的字面量。
 import datetime, hashlib, json, os, re, subprocess, sys, tempfile, sqlite3, shutil, time, zipfile
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, FW)

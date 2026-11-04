@@ -1,4 +1,5 @@
 # 部署后验证只做判断。不连飞书，不发消息，不结束进程。
+# win-path-fixture：假进程表和假 base 目录串，喂给只读的判定函数。
 import json, os, re, subprocess, sys
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

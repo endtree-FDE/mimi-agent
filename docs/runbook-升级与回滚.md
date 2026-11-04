@@ -48,6 +48,8 @@
 
 **测试**：`python tests\run_tests.py` 一条红就停下。Windows 上带 `PYTHONUTF8=1` 和不带都跑一遍更稳——不带时按 cp936 读文件，写死 UTF-8 的测试夹具会在那儿挂，而 CI 的 windows 那一格恰好两种都跑。
 
+CI 的 Lint 那一格还盯一件只在 Linux 上才暴露的事：测试里的 Windows 形状路径。`"C:/x"` 这种串在 Windows 上算绝对路径、在 Linux 上只是普通相对路径，`os.path.join(base, "C:/x")` 在前者直接丢掉 `base`、在后者把两段拼起来，所以同一行断言两个系统测的**不是同一件事**，而它看起来一直是绿的。要「一个绝对路径」就用 `tempfile.gettempdir()` 现取；确实要 Windows 形状（假进程表、假命令行、盘符拒绝用例）时写一行声明，说明为什么这串就该是那个形状。
+
 **重启之后**（`checks\verify_deploy.py` 的 JSON，只读 `status` 和 `fails`）：
 
 - `status` 必须是 `PASS`。`warns` 的条数不是固定的，带不带 `--doctor` 差好几条，别拿条数当闸门。

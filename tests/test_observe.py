@@ -1,4 +1,5 @@
 # 结构化日志和只读诊断。不连飞书，不发消息，不结束进程。
+# win-path-fixture：假进程表和假目录串，只喂给日志和诊断去格式化。
 import base64, json, os, shutil, subprocess, sys, tempfile
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

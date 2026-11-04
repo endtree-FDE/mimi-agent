@@ -1,4 +1,5 @@
 # 测试用假 cursor-agent：按提示词里的标记输出 stream-json（--stream-partial-output 格式，与 2026.10.16 版实测一致）
+# win-path-fixture：假提示词里出现的 Windows 路径只是字符串，不拼路径。
 import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import utf8io  # noqa: F401  父进程按 UTF-8 读这条管道
