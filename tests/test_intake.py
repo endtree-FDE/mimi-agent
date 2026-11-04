@@ -274,6 +274,28 @@ def _load_example(work, **over):
     return path
 
 
+def _stage_fake_lark(env, work):
+    """自检（--check）对 lark-cli 只做存在性探测：agentbot.py 的 self_check 是
+    shutil.which(lark_exe()[0]) or os.path.exists(lark_exe()[0])。CI runner 上
+    没装 lark-cli，探测判 FAIL 并把 --check 的退出码打成 1（issue #86）。
+    这里按 lark_exe() 的查找规则（Windows 认 %APPDATA% 下的 npm/lark-cli.cmd，
+    POSIX 认 PATH 里的 lark-cli）给这个子进程造一个假的，让探测走 OK。
+    只改本测试子进程的环境，不碰机器。"""
+    if os.name == "nt":
+        npmdir = os.path.join(work, "appdata", "npm")
+        os.makedirs(npmdir, exist_ok=True)
+        with open(os.path.join(npmdir, "lark-cli.cmd"), "w", newline="") as f:
+            f.write("@echo off" + chr(13) + chr(10) + "exit /b 0" + chr(13) + chr(10))
+        env["APPDATA"] = os.path.join(work, "appdata")
+    else:
+        bindir = os.path.join(work, "bin")
+        os.makedirs(bindir, exist_ok=True)
+        fake = os.path.join(bindir, "lark-cli")
+        with open(fake, "w") as f:
+            f.write("#!/bin/sh" + chr(10) + "exit 0" + chr(10))
+        os.chmod(fake, 0o755)
+        env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+
 run_dir = tempfile.mkdtemp(prefix="intake_check_")
 try:
     os.makedirs(os.path.join(run_dir, "kb"), exist_ok=True)
@@ -284,6 +306,7 @@ try:
     env["AGENTBOT_FAKE_SEND"] = os.path.join(run_dir, "sent.jsonl")
     env.pop("AGENTBOT_FAKE_DNS", None)
     env["AGENTBOT_FAKE_DNS"] = json.dumps(PUB)
+    _stage_fake_lark(env, run_dir)
     events = os.path.join(run_dir, "events.jsonl")
     open(events, "w", encoding="utf-8").write(json.dumps(
         {"event": {"message_id": "i1", "chat_id": "oc_chat1", "chat_type": "group", "message_type": "text",
