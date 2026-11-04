@@ -1,6 +1,6 @@
 # Mimi Agent
 
-[![version](https://img.shields.io/badge/version-0.10.0-blue)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.11.0-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows-lightgrey)](scripts/setup.ps1)
 [![model](https://img.shields.io/badge/model-Cursor%20%7C%20OpenAI%20compatible-blueviolet)](docs/换模型.md)
@@ -261,6 +261,7 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `docs/一键安装.md` | 第一次在 Windows 上安装：一题一题问，密钥不进文件 |
 | `docs/快速开始.md` | 新人 15 分钟跑起来 |
 | `docs/排障.md` | 常见问题 |
+| `docs/release-0.11.0.md` | v0.11.0 发布说明（2026-11-05）。接待桥 `intake`（只进不出，默认关）、对外口径唯一来源、多入口对照与方案 |
 | `docs/release-0.10.0.md` | v0.10.0 发布说明（2026-11-04）。设置卡片重做、播报、一条命令的部署核对、升级期间放锁、consumer 退出记账、升级与回滚手册 |
 | `docs/release-0.9.0.md` | v0.9.0 发布说明（2026-10-20）。调用记录、复盘写回、技能自动改进、主理人加专员 |
 | `docs/release-0.8.1.md` | v0.8.1 发布说明（2026-10-20）。卡片回调没开通时不再误报断线，也不反复重启 |
