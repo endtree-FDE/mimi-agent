@@ -54,8 +54,9 @@ CI 的 Lint 那一格还盯一件只在 Linux 上才暴露的事：测试里的 
 
 - `status` 必须是 `PASS`。`warns` 的条数不是固定的，带不带 `--doctor` 差好几条，别拿条数当闸门。
 - `topology.serving` 必须是 1。0 或 2 都是 `FAIL`；0 有两种意思——进程真没起来，或者进程表没读到（后者只提示，不猜）。
-- `runtime.restart_pending` 为真只写进 `warns`，不改结论。它专指「代码合完了、进程还是旧的」那段窗口，这一版到位之后必须为假。
-- `heartbeat` 年龄超过 `alerts.unhealthy_after_sec`（没写按 180 秒）是 `FAIL`。别用日志里有没有新行当活着的判据，要看 `state\heartbeat` 的年龄。
+- `topology.bus` 认的是命令行里带 `event _bus` 且同 profile 的进程。总线比服务进程晚起来：真机上服务进程起来后 13 秒那一次采样是 0，50 秒那一次才是 1。头一次采到 0 别当结论，等半分钟再采；只有过了几分钟还是 0，才按没起来处理。
+- `runtime.restart_pending` 为真只写进 `warns`，不改结论。它专指「代码合完了、进程还是旧的」那段窗口，这一版到位之后必须为假。比的是根目录那一层 `.py` 的最新改动时间和进程启动时间，所以只动 `docs/`、`tests/`、`checks/` 的那一版不会让它变真；版本号也是每次调用重读 `VERSION`，不重启就已经显示新版。所以要不要重启看这个窗口，不看版本号。
+- `heartbeat` 年龄超过 `alerts.unhealthy_after_sec`（没写按 180 秒）是 `FAIL`。别用日志里有没有新行当活着的判据，要看 `state\heartbeat` 的年龄。反过来说，心跳新也只证明有进程在跑——它是定时器写的。真要知道消息通路在不在，看 `logs\bot.log` 里 `[consume:im.message.receive_v1] [source] feishu-websocket: connected` 那一行。
 - `git.tags` 为空只进 `warns`：意思是「说不清这台跑的是哪版」。这就是第 2 步要打标注 tag 的理由。
 - `config.kb`：目录在不在、认哪些扩展名、能检索到几条。`exists` 为真但 `files` 为 0 只提醒；知识库检索和 `kb_index` 都关着时连提醒都没有，那是正常配置。
 
