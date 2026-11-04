@@ -44,7 +44,7 @@ python checks\verify_deploy.py --base . -c agents\<名字>.json
 
 `git reset --keep` 留下配置、`state`、`kb`、`memory`、`redact.txt` 和 `logs`。不要用 `git reset --hard`，也不要 `git clean`。从上游标签取用就是上面这条 `reset --keep`；从本机另一个开发副本取用改成 `git fetch <副本> main` 再加 `git merge --ff-only FETCH_HEAD`，两条不要混着用。第 4 步要看的是 JSON 里的 `status` 是不是 `PASS`、`topology.serving` 是不是 1；`warns` 条数不是固定的，别拿它当闸门。四步的顺序和停手判据见 [runbook-升级与回滚](runbook-升级与回滚.md)。
 
-这一版没动消息解析、人设和写入确认，配置不用改。播报按需要再开；这台上的定时输出这次保持关，`/状态` 会明说这件事。
+这一版没动消息解析、人设和写入确认，配置不用改。播报按需要再开；三项定时输出都关着时 `/状态` 会明说「这个实例不会主动发任何定时消息」，不用猜。
 
 ## 退回 0.9.0
 
