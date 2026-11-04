@@ -112,14 +112,17 @@ try:
 finally:
     shutil.rmtree(d, ignore_errors=True)
 
-d, cp, _ = sandbox(heartbeat=str(int(NOW)), overrides={"kb_dir": "C:/outside/mumu-kb"})
+# 「绝对路径」必须两个系统都成立：CI 的 ubuntu 格里 "C:/outside/mumu-kb" 不是绝对路径，
+# os.path.join 会把它拼进仓库目录，于是断言永远测不到本意（落在仓外）。
+ABSENT_OUTSIDE = os.path.join(tempfile.gettempdir(), "agentbot_vd_absent_%s" % os.urandom(4).hex()).replace("\\", "/")
+d, cp, _ = sandbox(heartbeat=str(int(NOW)), overrides={"kb_dir": ABSENT_OUTSIDE})
 try:
     got = vd.verify(d, cp, with_doctor=False, now=NOW, processes=procs(d))
     check("kb_dir 写绝对路径时按原样落在仓外",
-          got["config"]["kb_path"] == "C:/outside/mumu-kb" and got["config"]["kb_outside_repo"] is True
+          got["config"]["kb_path"] == ABSENT_OUTSIDE and got["config"]["kb_outside_repo"] is True
           and got["status"] == "PASS", got["config"])
     check("仓外的 kb_dir 不存在时提醒「迁出后忘了改配置」这类错",
-          any("目录不存在" in x and "C:/outside/mumu-kb" in x for x in got["warns"]), got["warns"])
+          any("目录不存在" in x and ABSENT_OUTSIDE in x for x in got["warns"]), got["warns"])
 finally:
     shutil.rmtree(d, ignore_errors=True)
 
