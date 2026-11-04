@@ -293,8 +293,14 @@ try:
                           cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace",
                           env=env, timeout=90)
     out = (proc.stdout or "") + (proc.stderr or "")
+    # 退出码不能当判据：机器上没装 lark-cli 或没配模型密钥时 --check 本来就非 0，
+    # 那和接待桥没关系。这条只判两件事——自检走完了整趟，且接待桥自己没被拖进去拉或写。
+    lines = out.splitlines()
     check("自检一路走通，且不建账本、不写待审文件、不发东西",
-          proc.returncode == 0
+          proc.returncode in (0, 1)
+          and any(l.startswith("OK   redact names") for l in lines)
+          and any(l.startswith("OK   skills") for l in lines)
+          and not any(l.startswith(("FAIL", "HINT")) and ("intake" in l or "接待" in l) for l in lines)
           and not os.path.exists(os.path.join(run_dir, "state", "intake_state.json"))
           and not os.path.exists(os.path.join(run_dir, "intake"))
           and not os.path.exists(os.path.join(run_dir, "sent.jsonl")), out[-1200:])
