@@ -532,7 +532,7 @@ python checks/check_config.py agents/example.json
 
 去重靠 `state/intake_state.json` 里的编号账本：有编号用编号，没编号用内容哈希。对端重复推同一条不会写第二遍。账本先写临时文件再换过去，进程被中断也不会留半个。
 
-发出去的那一步是现成的，不改：看完 `intake/leads.md`，把挑出来的几行抄成 `broadcast/pending.txt`，交给播报的 `body_file`。要写入权限和 6 位确认码那套规矩照旧，见 [docs/确认方式.md](../docs/确认方式.md) 和 [docs/断线提醒与晨报.md](../docs/断线提醒与晨报.md)。`/状态` 里会多一行「合作意向接待：开，只收不发」，没打开时这一行不加。
+发出去的那一步是现成的，不改：看完 `intake/leads.md`，把挑出来的几行抄成 `broadcast/pending.txt`，交给播报的 `body_file`。接待桥自己一个写入工具都不碰，白名单和 6 位确认码那套规矩没有被绕开一步，见 [docs/确认方式.md](../docs/确认方式.md)；播报怎么进群、发几次，见 [docs/断线提醒与晨报.md](../docs/断线提醒与晨报.md)。`/状态` 里会多一行「合作意向接待：开，只收不发」，没打开时这一行不加。
 
 ## 用量周报 report
 
