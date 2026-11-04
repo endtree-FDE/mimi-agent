@@ -372,6 +372,10 @@ def handle_text(cfg, base, text, ctx, names, sender=None, served=None, now=None)
             if not skip:
                 targets = [c for c in (rec.get("chats") or []) if _served_ok(c, served)]
                 if not targets:
+                    # 这批意向还留在待看里（不进 handled），但这个码说作废就得真作废：
+                    # 落盘 used，否则换个群再回同一个码还是能发出去。
+                    state.update({"codes": _gc_codes(state.get("codes") or {}, now)})
+                    _save(path, state)
                     return "那个群不在本实例的服务范围内，没发。确认码已作废。"
                 body = _body(texts, names)
                 stamp = hashlib.sha1(code.encode("utf-8")).hexdigest()[:12]
@@ -383,9 +387,10 @@ def handle_text(cfg, base, text, ctx, names, sender=None, served=None, now=None)
                         result = "fail"
                     if result in ("ok", "unknown"):
                         sent_chats += 1
-            for bid in (rec.get("items") or []):
-                if bid not in handled:
-                    handled.append(bid)
+            if skip or sent_chats:
+                for bid in (rec.get("items") or []):
+                    if bid not in handled:
+                        handled.append(bid)
             state.update({"codes": _gc_codes(state.get("codes") or {}, now),
                           "handled": handled[-_KEEP_HANDLED:]})
             _save(path, state)
@@ -394,7 +399,7 @@ def handle_text(cfg, base, text, ctx, names, sender=None, served=None, now=None)
     if skip:
         return "%d 条已记账，没发。" % len(texts)
     if sent_chats == 0:
-        return "一条都没发出去（发送接口没认这笔），这批先算处理过了。"
+        return "一条都没发出去（发送接口没认这笔），这批还留在待看里，下一轮会换个码再提醒。"
     return "已发到 %d 个群，这批 %d 条算处理过了。" % (sent_chats, len(texts))
 
 

@@ -202,6 +202,16 @@ with _Dir() as base:
           out is not None and "没发" in out and sent.kinds("chat") == [], out)
 with _Dir() as base:
     sent, code, _ = _issue(_cfg(), base, ["甲"])
+    _ht(_cfg(), base, "发意向 %s" % code, CTX_OK, sent, served=["oc_other"])
+    again = _ht(_cfg(), base, "发意向 %s" % code, CTX_OK, sent, served=[CHAT])
+    state = json.load(open(intake_notify._state_path(base), encoding="utf-8"))
+    check("说「确认码已作废」就真作废：再换成服务范围内的群回同一个码也不发，但这批意向还留在待看里",
+          again is not None and sent.kinds("chat") == []
+          and bool((state.get("codes") or {}).get(code, {}).get("used"))
+          and intake_notify.pending(_cfg(), base) != [],
+          json.dumps([again, (state.get("codes") or {}).get(code)]))
+with _Dir() as base:
+    sent, code, _ = _issue(_cfg(), base, ["甲"])
     stale = _ht(_cfg(), base, "发意向 %s" % code, CTX_OK, sent, served=[CHAT], now=T0 + 90000)
     check("确认码过期后不发，正文和账本都不动",
           stale is not None and "过期" in stale and sent.kinds("chat") == [], stale)
@@ -224,6 +234,16 @@ with _Dir() as base:
     check("重写过文件也不会把已发过的那几条算成新的",
           got["reason"] == "notified" and got["new"] == 1 and "丙" in sent2.kinds("user")[0]["text"],
           json.dumps([got, sent2.calls]))
+
+# ---- 一条都没发出去时不要把账记成已处理 ----
+with _Dir() as base:
+    sent, code, _ = _issue(_cfg(), base, ["甲", "乙"])
+    broken = Sender("fail")
+    out = _ht(_cfg(), base, "发意向 %s" % code, CTX_OK, broken, served=[CHAT])
+    check("发送接口一条都没认，回话照实说没发出去",
+          out is not None and "没发出去" in out, out)
+    check("这一批没发成就留在待看里，下一轮提醒会换个新码",
+          len(intake_notify.pending(_cfg(), base)) == 2, json.dumps(intake_notify.pending(_cfg(), base)))
 
 # ---- 一次最多带几条 ----
 with _Dir() as base:

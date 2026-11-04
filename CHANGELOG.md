@@ -10,7 +10,7 @@
 
 ### 添加
 
-- 意向待看提醒 `intake.notify`，默认关，而且比接待桥多一层：`intake.enabled` 和 `intake.notify.enabled` 都要为 `true` 才跑。补的是「到飞书里的人」这一跳：`intake/leads.md` 攒了新东西时，私聊主人一条「官网那边攒了 N 条」，带上这一批的摘要和一个确认码（位数跟着 `confirm.code_digits`，默认 6 位；默认 24 小时有效，用一次作废）。主人在同一条私聊里回「发意向 123456」才发进 `chat_ids` 里那些群，回「不发意向 123456」只记账。别人拿同一个码、本人在群里回、码过期，都只回一句说明，不消耗码；配置的群不属于本实例服务范围时一条都不发，码作废。每天最多提醒几条、两条之间至少隔多久、一条里最多带几条都能配，都有界。正文走 `outbound.prepare`，先脱敏再去 @所有人，并且留出余量不撞发送接口那 3500 字的硬上限。接待桥本体仍然一个字节都不发——它内部没有发送通路，这条红线有测试写死。见 [agents/CONFIG.md](agents/CONFIG.md) 的「待看提醒 intake.notify」，回归测试在 [tests/test_intake_notify.py](tests/test_intake_notify.py)（34 条）。
+- 意向待看提醒 `intake.notify`，默认关，而且比接待桥多一层：`intake.enabled` 和 `intake.notify.enabled` 都要为 `true` 才跑。补的是「到飞书里的人」这一跳：`intake/leads.md` 攒了新东西时，私聊主人一条「官网那边攒了 N 条」，带上这一批的摘要和一个确认码（位数跟着 `confirm.code_digits`，默认 6 位；默认 24 小时有效，用一次作废）。主人在同一条私聊里回「发意向 123456」才发进 `chat_ids` 里那些群，回「不发意向 123456」只记账。别人拿同一个码、本人在群里回、码过期，都只回一句说明，不消耗码；配置的群不属于本实例服务范围时一条都不发，码作废，但那几条仍留在待看里，下一轮换一个新码再提醒；发送接口一条都没认上时也照实回「没发出去」，不把这批记成已处理。每天最多提醒几条、两条之间至少隔多久、一条里最多带几条都能配，都有界。正文走 `outbound.prepare`，先脱敏再去 @所有人，并且留出余量不撞发送接口那 3500 字的硬上限。接待桥本体仍然一个字节都不发——它内部没有发送通路，这条红线有测试写死。见 [agents/CONFIG.md](agents/CONFIG.md) 的「待看提醒 intake.notify」，回归测试在 [tests/test_intake_notify.py](tests/test_intake_notify.py)（37 条）。
 
 ### 变更
 
