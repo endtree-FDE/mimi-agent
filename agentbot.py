@@ -15,7 +15,7 @@ import json, os, re, subprocess, sys, time, logging, collections, threading, sql
 
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import utf8io  # 管道上的标准流改为 UTF-8，避免中文 Windows 的代码页把日志解崩
-import acp_client, calltrace, broadcast, channels, crew, digest, feishu_link, guard, health_alert, intake, knowledge, lifecycle, memory, memory_growth, observe, proc_identity, providers, retrospect, skill_evolve, usage
+import acp_client, calltrace, broadcast, channels, crew, digest, feishu_link, guard, health_alert, intake, intake_notify, knowledge, lifecycle, memory, memory_growth, observe, proc_identity, providers, retrospect, skill_evolve, usage
 import confirm_mode, feature_switch
 from channels.base import Cap, can_update, status_modes
 from channels.feishu import MEMBER_ADDED, MEMBER_DELETED
@@ -320,6 +320,10 @@ def status_text(sess, chat_id=""):
     intake_line = intake.status_line(CFG, BASE)
     if intake_line:
         lines.append(intake_line)
+    # 提醒桥是接待桥之后的另一跳：只私聊主人，确认之前不进群。没打开时不加这行。
+    notify_line = intake_notify.status_line(CFG, BASE)
+    if notify_line:
+        lines.append(notify_line)
     if usage.enabled(CFG):
         lines.append("用量周报：开。每周私聊主人一次，不含问题原文和编号。")
     else:
@@ -1796,6 +1800,7 @@ def _direct_command(q):
     if knowledge.enabled(CFG) and knowledge.command_kind(q): return True
     if GMEM.is_command(q): return True
     if memory_growth.is_command(CFG, q): return True
+    if intake_notify.is_command(CFG, q): return True
     if calltrace.looks_like(q): return True
     if skill_evolve.looks_like(q): return True
     if q in ("/help", "帮助") or (len(q) <= 30 and HELP_RX.search(q)): return True
@@ -1919,6 +1924,8 @@ def _handle_claimed(ev, mid, ctype, uid):
         reply(mid, _kb_command(kb_kind, ctx)); return
     gh = memory_growth.handle_text(CFG, BASE, GMEM, q, ctx, REDACT_NAMES)
     if gh is not None: reply(mid, gh); return
+    nh = intake_notify.handle_text(CFG, BASE, q, ctx, REDACT_NAMES, _outbound_send, served=_served_ids())
+    if nh is not None: reply(mid, nh); return
     mr = GMEM.handle(q, ctx)  # 记忆命令：/记忆、记一下/记住/备忘、/忘记 N、/忘记全部、确认清空（不调 agent）
     if mr is not None: reply(mid, mr); return
     if q in ("/help", "帮助") or (len(q) <= 30 and HELP_RX.search(q)):  # 问能力/权限：直接列能力和边界，不调 agent、不翻资料
@@ -2348,6 +2355,11 @@ def maintenance_tick(now=None):
     except Exception:
         log.exception("intake tick failed")
     try:
+        # 提醒桥：把待看的条数私聊主人，确认之前不进群。它拿的是同一个发送接口，不自己造一条通路。
+        intake_notify.tick(CFG, BASE, REDACT_NAMES, now, _outbound_send, _served_ids(), log=log)
+    except Exception:
+        log.exception("intake notify tick failed")
+    try:
         usage.deliver(CFG, BASE, REDACT_NAMES, now, _outbound_send, log)
     except Exception:
         log.exception("usage report tick failed")
@@ -2402,6 +2414,8 @@ def self_check():
     for line in broadcast.hints(CFG, BASE):
         print("HINT " + line)
     for line in intake.hints(CFG, BASE):
+        print("HINT " + line)
+    for line in intake_notify.hints(CFG, BASE):
         print("HINT " + line)
     report_cfg = usage.settings(CFG)
     if report_cfg["enabled"] and not usage.owner_ids(CFG):

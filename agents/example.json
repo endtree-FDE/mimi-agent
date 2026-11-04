@@ -95,7 +95,18 @@
     "interval_min": 30,
     "timeout_sec": 8,
     "timezone": "Asia/Shanghai",
-    "out_file": "intake/leads.md"
+    "out_file": "intake/leads.md",
+    "notify": {
+      "enabled": false,
+      "owner_open_ids": [],
+      "chat_ids": [],
+      "min_items": 1,
+      "max_per_day": 2,
+      "min_gap_min": 60,
+      "max_items": 5,
+      "confirm_ttl_sec": 86400,
+      "timezone": "Asia/Shanghai"
+    }
   },
   "features": {
     "memory": true,

@@ -330,7 +330,23 @@
         "interval_min": {"type": "integer", "minimum": 15, "maximum": 1440},
         "timeout_sec": {"type": "integer", "minimum": 1, "maximum": 20},
         "timezone": {"type": "string"},
-        "out_file": {"type": "string", "description": "待审文件，相对实例目录。绝对路径、盘符、.. 一律回到默认值。"}
+        "out_file": {"type": "string", "description": "待审文件，相对实例目录。绝对路径、盘符、.. 一律回到默认值。"},
+        "notify": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "待看提醒。默认关。开着时到点给主人私聊发一条「有 N 条待看」并附确认码；主人在私聊本人回复确认码之后才把那几条发到 chat_ids 里的群。不回复、回复错的人、码过期都不发。",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "owner_open_ids": {"type": "array", "items": {"type": "string"}, "description": "收提醒的主人编号。空着沿用 report/alerts 那一份。"},
+            "chat_ids": {"type": "array", "items": {"type": "string"}, "description": "确认之后往哪些群发。只发已经在服务范围内的群。"},
+            "min_items": {"type": "integer", "minimum": 1, "maximum": 50},
+            "max_per_day": {"type": "integer", "minimum": 1, "maximum": 10},
+            "min_gap_min": {"type": "integer", "minimum": 5, "maximum": 1440},
+            "max_items": {"type": "integer", "minimum": 1, "maximum": 20},
+            "confirm_ttl_sec": {"type": "integer", "minimum": 60, "maximum": 604800},
+            "timezone": {"type": "string"}
+          }
+        }
       }
     },
     "features": {
