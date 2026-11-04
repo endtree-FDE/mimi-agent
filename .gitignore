@@ -32,6 +32,9 @@ uploads/
 broadcast/brief.txt
 broadcast/pending.txt
 
+# 接待桥攒下来的合作意向。里面是陌生访客写的话，绝不提交。
+intake/leads.md
+
 # 客户名名单和本地密钥。不要提交填好的文件。
 redact.txt
 redact_candidates.txt

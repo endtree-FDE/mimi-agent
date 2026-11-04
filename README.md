@@ -72,7 +72,7 @@ flowchart LR
 
 ## 功能
 
-- 只在被 @ 或被允许的私聊里回答。断线私聊、早晨摘要、播报和用量周报默认关。前三项见 [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md)，周报见 [docs/用量周报.md](docs/用量周报.md)。播报不读日历和任务表。
+- 只在被 @ 或被允许的私聊里回答。断线私聊、早晨摘要、播报、用量周报和接待桥默认关。前三项见 [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md)，周报见 [docs/用量周报.md](docs/用量周报.md)，接待桥见 [docs/多入口对照与方案.md](docs/多入口对照与方案.md)。播报不读日历和任务表。
 - 群默认仍看 `chat_ids`。要改成拉进群再认，把 `chat_ids` 留空并打开 `chats.auto_join`。默认还要白名单成员在群里发「/认群」，避免被陌生人拉进乱群消耗额度。见 [agents/CONFIG.md](agents/CONFIG.md)。
 - 同一个话题接着聊；发「新话题」就清空这几轮上下文。
 - 长期记忆按群分开。白名单里的人才能记和删，删除是真删。
@@ -98,10 +98,11 @@ flowchart LR
 | 记忆成长 | 提议记住群里定过的事，有人点头才写入 | 私聊发「设置」 |
 | 早间待办 | 早上往群里发今天的日程和未完成任务 | 私聊发「设置」 |
 | 播报 | 到点往指定群发站点健康和一段只读正文。不读日历和任务表 | 改自己的配置，见 [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md) |
+| 接待桥 | 到点从自己的公网端点拉访客的合作意向，写进本机一个待审文件。只收不发，一条消息都不发 | 改自己的配置，见 [docs/多入口对照与方案.md](docs/多入口对照与方案.md) |
 | 断线提醒 | 连不上时私聊主人 | 私聊发「设置」 |
 | 技能 | 选题、写稿这类事按现成步骤做 | 私聊发「设置」 |
 
-播报不在「设置」卡片里。卡片上仍是原来的九项。转塘艺讯这类群不要用卡片里的早间待办，只在配置里打开播报。
+播报和接待桥不在「设置」卡片里。卡片上仍是原来的九项。转塘艺讯这类群不要用卡片里的早间待办，只在配置里打开播报。接待桥更没有卡片项，它压根不发消息。
 
 ## 快速开始
 
@@ -138,7 +139,7 @@ python agentbot.py agents/example.json --doctor
 
 The purpose, the write lock, and the “do not commit” rule are in the English paragraph at the top. The diagram in [架构](#架构) is the path from a Feishu message to a redacted reply. Omitting `channel` keeps that Feishu path. [docs/渠道.md](docs/渠道.md) is the adapter boundary; [docs/渠道-企业微信.md](docs/渠道-企业微信.md) is the WeCom design and is not enabled by default. [docs/arch-now.mmd](docs/arch-now.mmd) is the current path with the model choice. [docs/arch-full.mmd](docs/arch-full.mmd) is the longer design, including jobs that are not on by default.
 
-On Windows, first-time setup is `scripts\setup.ps1`. It asks one question at a time and does not write the App Secret into a file. See [docs/一键安装.md](docs/一键安装.md). A 15-minute offline start is in [docs/快速开始.md](docs/快速开始.md). Troubleshooting is in [docs/排障.md](docs/排障.md). `--doctor` only prints a local diagnosis and does not send messages. Disconnect alerts, the morning digest, and the broadcast are off unless `alerts.enabled`, `digest.enabled`, and `broadcast.enabled` are true. The broadcast sends one prepared text per chat per day. It can include public HTTP checks and a file or command, and it does not read the calendar or task table. The weekly usage report is also off unless `report.enabled` is true, and it is a private message. See [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md) and [docs/用量周报.md](docs/用量周报.md).
+On Windows, first-time setup is `scripts\setup.ps1`. It asks one question at a time and does not write the App Secret into a file. See [docs/一键安装.md](docs/一键安装.md). A 15-minute offline start is in [docs/快速开始.md](docs/快速开始.md). Troubleshooting is in [docs/排障.md](docs/排障.md). `--doctor` only prints a local diagnosis and does not send messages. Disconnect alerts, the morning digest, and the broadcast are off unless `alerts.enabled`, `digest.enabled`, and `broadcast.enabled` are true. The broadcast sends one prepared text per chat per day. It can include public HTTP checks and a file or command, and it does not read the calendar or task table. The weekly usage report is also off unless `report.enabled` is true, and it is a private message. The intake bridge stays off unless `intake.enabled` is true, and it goes the other way: it pulls visitor collaboration leads from one public HTTPS endpoint into a local file for a human to read, and sends nothing by itself. See [docs/断线提醒与晨报.md](docs/断线提醒与晨报.md), [docs/用量周报.md](docs/用量周报.md) and [docs/多入口对照与方案.md](docs/多入口对照与方案.md).
 
 Quick start on a machine that will really talk to Feishu:
 
@@ -184,6 +185,7 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `alerts` | 长连接或心跳不健康时私聊主人。不写或 `enabled` 为 `false` 时不发 |
 | `digest` | 到点往指定群发一条今日摘要。不写或 `enabled` 为 `false` 时不发。不会点名所有人 |
 | `broadcast` | 到点往指定群发一条只读播报。不写或 `enabled` 为 `false` 时不发。不调用模型，不读日历和任务表，不会点名所有人 |
+| `intake` | 到点从一个公网 HTTPS 端点拉访客合作意向，写进本机 `intake/leads.md`。不写或 `enabled` 为 `false` 时连拉都不拉。只收不发：不调模型、不写飞书。钥匙只写环境变量名 |
 | `report` | 每周私聊主人一份用量合计。不写或 `enabled` 为 `false` 时不发。没有问题原文和编号 |
 
 `REPLACE_` 开头的值必须换成你自己的，留着不能启动。
@@ -233,12 +235,16 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `health_alert.py` | 断线提醒。默认关 |
 | `digest.py` | 早晨摘要。默认关。每个群每天最多一条 |
 | `broadcast.py` | 播报。默认关。站点、文件或命令的只读正文，每个群每天最多一条。不读日历和任务表 |
+| `intake.py` | 接待桥。默认关。只进不出：从公网端点拉访客合作意向，去重写进本机 `intake/leads.md`，一条消息都不发。见 [docs/多入口对照与方案.md](docs/多入口对照与方案.md) |
+| `intake/leads.example.md` | 那份待审正文的样子。真文件在 `.gitignore` 里，不提交 |
 | `usage.py` | 用量周报。默认关。每周私聊一次，重启不重发 |
 | `feature_switch.py` | 主人在私聊里开关功能。见 [docs/新手开关功能.md](docs/新手开关功能.md) |
 | `scripts/reload.ps1` | 改完开关后平滑重启：先停，确认没有第二个接收进程，再启动 |
 | `checks/verify_deploy.py` | 升级或回滚之后一条命令拿机器可读结论（版本、心跳、拓扑、配置、kb、诊断）。只读，不发消息也不动进程。见 [docs/部署后验证.md](docs/部署后验证.md) |
 | `docs/runbook-升级与回滚.md` | 升级四步（展开八条命令）、每一步的停手判据、含看门狗的回滚顺序、备份和自动化的坑 |
 | `docs/断线提醒与晨报.md` | 断线提醒和早晨摘要怎么开，以及飞书要哪些权限 |
+| `docs/对外口径.md` | 官网浮层和飞书群共用的对外口径唯一来源（`voice-v1`）：能介绍哪些作品和路径、口吻、保密期不复述名字、不谈什么、怎么交接 |
+| `docs/多入口对照与方案.md` | LangBot、AstrBot、NoneBot2 怎么做多入口，我们这套缺哪四样，对外入口会怎么坏，以及为什么先不并进程 |
 | `docs/用量周报.md` | 用量周报怎么开，统计什么，什么不会写进去 |
 | `docs/调用记录.md` | 每轮调用链写在本机，主人私聊可看，周报只加合计 |
 | `docs/复盘写回.md` | 一轮做完后提议一句短复盘，确认后才写入该群记忆 |

@@ -319,6 +319,20 @@
         "window_min": {"type": "integer", "minimum": 0}
       }
     },
+    "intake": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "接待桥：定时从公网 HTTPS 端点拉合作意向，去重后追加写进一个待审文件。只进不出，自己不发任何消息。不写或 enabled 为 false 时完全不参与。",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "url": {"type": "string", "description": "对端地址。必须是公网 http(s)；内网、带账号密码、地址里夹密钥的一律视为没配。"},
+        "token_env": {"type": "string", "description": "存放密钥的环境变量名。配置里只写变量名，不写值；变量为空则这一轮不去拉。"},
+        "interval_min": {"type": "integer", "minimum": 15, "maximum": 1440},
+        "timeout_sec": {"type": "integer", "minimum": 1, "maximum": 20},
+        "timezone": {"type": "string"},
+        "out_file": {"type": "string", "description": "待审文件，相对实例目录。绝对路径、盘符、.. 一律回到默认值。"}
+      }
+    },
     "features": {
       "type": "object",
       "additionalProperties": true,

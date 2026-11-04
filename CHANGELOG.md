@@ -8,7 +8,11 @@
 
 ## [Unreleased]
 
-（这一栏现在是空的。往上数是已经发出去的版本。）
+### 添加
+
+- 接待桥 `intake`，默认关。不写这一段或 `enabled` 不是 `true` 时，不拉取、不建目录、`/状态` 也不多这一行。方向和播报相反：只收不发。到点从配置里那一个公网 HTTPS 端点拉「合作意向」（访客想做什么形式、大概什么时候要、需求小结），按编号去重，追加写进本机的 `intake/leads.md`。它不调模型、不读日历、不写飞书，一条消息都不发；要进群得人挑几行复制进 `broadcast/pending.txt`，次日走现成的播报 `body_file`。地址用播报同一把尺判（内网、带账号密码、带密钥参数、控制字符都拒），钥匙只写环境变量名，配置里不出现它的值；变量空了记 `no_token`，值里带换行当请求头注入直接拒。拉取最长等 20 秒，所以拿锁分两段，网络等待不占着播报那把五秒的锁。待审文件在 `.gitignore` 里。演练、`--check` 和 `--doctor` 一个文件都不生成，回归测试用假发送落点证明过。见 [agents/CONFIG.md](agents/CONFIG.md) 的「接待桥 intake」和 [docs/多入口对照与方案.md](docs/多入口对照与方案.md)。
+- 新增 [docs/对外口径.md](docs/对外口径.md)（`voice-v1`）：官网浮层和飞书群共用的对外口径唯一来源——可介绍的作品清单与路径、口吻与风格锚、保密期作品不复述名字、不报价不承诺档期、成员身份不介绍、`[[COOP]]` 交接协议。这一版是人复制引用，不是运行时抓取；为什么先不做抓取，里面写了。同时记录一处已经漂了的事实：官网提示词里的开源模板地址还写着旧名 `feishu-group-agent`，301 跳到新名，链接没坏，但访客听到的介绍落后。
+- 新增 [docs/多入口对照与方案.md](docs/多入口对照与方案.md)：LangBot（Web Page Bot 的嵌入脚本 + WebSocket + 可选 Turnstile + 连接数上限回 429、HTTP Bot 的 HMAC 签名 + 202 + 回调地址只从配置读）、AstrBot（适配器只需 `run()`/`meta()`，`webchat` 不自建服务、复用 WebUI 的 FastAPI 走 SSE，会话键 `platform_id:message_type:session_id`）、NoneBot2（Forward/Reverse driver + Mixin，服务端 driver 只能有一个，传输归 driver、协议归 adapter）三家怎么做多入口，对照我们已有的 `channels/` 能力清单和 `p2p_limited` 访客档，列出缺的四样，逐条写清对外入口会怎么坏、现在谁在守，结论是三个建议：不并进程、先并口径、只开一条只进不出的桥。
 
 ## [0.10.0] - 2026-11-04
 

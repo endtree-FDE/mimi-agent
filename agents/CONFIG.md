@@ -505,6 +505,35 @@ python checks/check_config.py agents/example.json
 
 `broadcast/pending.txt` 里写待审那几行，例如「待审」和每条一行。仓库里没有资讯抓取。README 里的 mumu 是另一份配置，不是这段代码。`digest` 只拼日历和未完成任务。这一版的播报只发送上面准备好的正文。AI 资讯以后再做。
 
+## 接待桥 intake
+
+默认关。不写这一段，或 `enabled` 不是 `true`，就不会去拉任何东西，也不会写任何文件。它是这一段里唯一「收」的定时项：到点从公网 HTTPS 端点读一批合作意向，去重之后追加写进本机的待审文件，然后就没有然后了。不调用模型，不读日历，不发消息。发不发、发给谁，由人看完那个文件决定。
+
+```json
+"intake": {
+  "enabled": false,
+  "url": "https://example.com/leads.json",
+  "token_env": "MIMI_INTAKE_TOKEN",
+  "interval_min": 30,
+  "timeout_sec": 8,
+  "timezone": "Asia/Shanghai",
+  "out_file": "intake/leads.md"
+}
+```
+
+- `url`：对端地址。只认公网 http(s)，判定和播报探站点用同一把尺：内网、元数据地址、带账号密码的、地址里夹客户名或密钥的，都算「没配」，`--check` 会直说不去拉。这台机器只有出去的长连接，没有能对公网开放的入口，所以是「我们定时去取」，不是「官网往里推」。
+- `token_env`：存放密钥的环境变量名。配置里只写变量名，值不进配置文件，也不写进日志和待审文件。变量名写了但变量是空的，这一轮不去拉（报 `no_token`）；变量里有换行、制表或 NUL 的，当请求头注入直接拒掉，一个字节都不发。
+- `interval_min`：最短多少分钟拉一次，越界退回 30，最低 15。没到点不去拉，也不算失败。
+- `timeout_sec`：一次网络等待的上限，1 到 20 秒，越界退回 8。
+- `timezone`：待审文件里那个时间按哪个时区写，认不出来就不拉。不自己造 UTC 偏移。
+- `out_file`：待审文件，相对机器人目录。绝对路径、盘符、`..` 一律退回默认的 `intake/leads.md`。这个文件已进 `.gitignore`，里面是陌生访客写的话，别提交。样子在 `intake/leads.example.md`。
+
+来的一条记录认这几组字段名：`need`/`form`/`type`/`形式`/`需求类型`、`when`/`time`/`deadline`/`时间`/`档期`、`note`/`summary`/`text`/`简述`/`需求`、`page`/`path`/`source`/`来源`、`id`/`key`/`编号`。认不到就当没有那一项；三项全空的丢掉；正文里夹着客户名或手机号的整条丢掉，不等写文件时才打码。对端返坏 JSON、纯 HTML、超过 4096 字节的，整批丢掉不猜；一次最多处理 20 条。
+
+去重靠 `state/intake_state.json` 里的编号账本：有编号用编号，没编号用内容哈希。对端重复推同一条不会写第二遍。账本先写临时文件再换过去，进程被中断也不会留半个。
+
+发出去的那一步是现成的，不改：看完 `intake/leads.md`，把挑出来的几行抄成 `broadcast/pending.txt`，交给播报的 `body_file`。要写入权限和 6 位确认码那套规矩照旧，见 [docs/确认方式.md](../docs/确认方式.md) 和 [docs/断线提醒与晨报.md](../docs/断线提醒与晨报.md)。`/状态` 里会多一行「合作意向接待：开，只收不发」，没打开时这一行不加。
+
 ## 用量周报 report
 
 默认关。不写这一段，或 `enabled` 不是 `true`，就不会私聊，也不会占每周一次的名额。这是私聊，不是群消息。群里主动发的，是各自打开之后的早晨摘要和播报，默认都关。播报不读日历和任务表。
@@ -583,7 +612,7 @@ python checks/check_config.py agents/example.json
 | 知识库 | `wiki:node:read`（或 `wiki:wiki:readonly`、`wiki:node:retrieve`） |
 | 多维表格 | `base:record:read` |
 
-文档没分享给应用时，这一份会记失败，已经收过的内容先留着。图片没有单独的文字识别，不进索引。PDF、Word、PPT、Excel、CSV、Markdown、文本和 zip 用原来的读取和上限。细节见 [docs/知识库.md](docs/知识库.md)。
+文档没分享给应用时，这一份会记失败，已经收过的内容先留着。图片没有单独的文字识别，不进索引。PDF、Word、PPT、Excel、CSV、Markdown、文本和 zip 用原来的读取和上限。细节见 [docs/知识库.md](../docs/知识库.md)。
 
 `tools.docs_read.allow_tokens` 如果写了非空名单，知识库也只收名单里的云文档和知识库，不会因为开了检索就读得更宽。
 

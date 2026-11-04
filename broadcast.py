@@ -391,13 +391,21 @@ def _excerpt(raw):
     return text[:_EXCERPT]
 
 
-def _http_get(url, timeout, limit):
-    """只连接已经判定为公网的地址，不跟随跳转，只读有限长度。"""
+def _http_get(url, timeout, limit, headers=None):
+    """只连接已经判定为公网的地址，不跟随跳转，只读有限长度。
+    headers 是给接待桥用的可选参数：调用方传的键值只要有一个带换行、制表或 NUL，
+    就当请求头注入直接拒掉，连都不连。不传时拼出来的请求和以前一模一样。"""
     import socket, ssl
     from urllib.parse import urlparse
     import acp_client
     if not _url_allowed(url, ()):
         return {"_error": "blocked"}
+    extra = ""
+    for key, value in sorted((headers or {}).items()):
+        name, text = str(key), str(value)
+        if any(c in name + text for c in "\r\n\t\x00") or not name.strip():
+            return {"_error": "blocked"}
+        extra += "%s: %s\r\n" % (name.strip()[:64], text.strip()[:512])
     parts = urlparse((url or "").strip())
     host = parts.hostname
     if not host:
@@ -434,7 +442,8 @@ def _http_get(url, timeout, limit):
     try:
         if scheme == "https":
             sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
-        req = "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: mimi-agent-broadcast\r\nConnection: close\r\n\r\n" % (path, host_ascii)
+        req = ("GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: mimi-agent-broadcast\r\n" % (path, host_ascii)
+               + extra + "Connection: close\r\n\r\n")
         sock.sendall(req.encode("ascii", "replace"))
         sock.settimeout(timeout)
         buf = b""

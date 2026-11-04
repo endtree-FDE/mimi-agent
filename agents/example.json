@@ -88,6 +88,15 @@
     "timezone": "Asia/Shanghai",
     "window_min": 180
   },
+  "intake": {
+    "enabled": false,
+    "url": "REPLACE_LEADS_HTTPS_URL",
+    "token_env": "",
+    "interval_min": 30,
+    "timeout_sec": 8,
+    "timezone": "Asia/Shanghai",
+    "out_file": "intake/leads.md"
+  },
   "features": {
     "memory": true,
     "p2p": true,
