@@ -107,6 +107,28 @@ check("数组和 {\"leads\": [...]} 都认，一次最多二十条",
       and intake.parse_body(json.dumps({"leads": [{"note": "甲"}]}))[0]["note"] == "甲"
       and intake.parse_body(json.dumps({"items": [{"note": "乙"}]}))[0]["note"] == "乙")
 
+# 下面这段是官网端点 GET /api/leads 真返回的那段 JSON，原样抄进来（2026-11-05 09:42，
+# 探针 v3-upgrade-work/site-bridge-20261105/e2e/e2e-socket.mjs 用真 socket 打编译出来的
+# onRequest 取回，落盘在同目录 e2e-result.json）。抄的是值本身，没有改成「更像测试」的写法。
+LEADS_RAW = ('{"leads":[{"id":"mw3cxuosi54p1omt","need":"线上展厅","when":"年底前",'
+             '"note":"探针走真 socket 取回的这条，想要一版影像概念稿",'
+             '"page":"/contact/","ts":"2026-11-05T09:42:58.204Z"}]}')
+_site_items = intake.parse_body(LEADS_RAW)
+check("官网端点真返回的那段 JSON 原样喂进来就认得，键是站点那六个",
+      len(_site_items) == 1 and sorted(_site_items[0]) == ["id", "need", "note", "page", "ts", "when"],
+      json.dumps(_site_items, ensure_ascii=False))
+_site_lead = intake.normalize(_site_items[0], NAMES) if _site_items else None
+check("站点那条的编号、形式、时间、小结一字不差传下来，来源取的是 page 不是别的键",
+      _site_lead is not None and _site_lead["id"] == "mw3cxuosi54p1omt"
+      and _site_lead["need"] == "线上展厅" and _site_lead["when"] == "年底前"
+      and _site_lead["note"] == "探针走真 socket 取回的这条，想要一版影像概念稿"
+      and _site_lead["where"] == "/contact/", json.dumps(_site_lead, ensure_ascii=False))
+check("这一段落到待看正文里有抬头和三行，抬头带上来源页",
+      _site_lead is not None and intake.block(_site_lead, datetime.datetime(2026, 11, 5, 17, 50))
+      == "## 2026-11-05 17:50 来自 /contact/\n- 形式：线上展厅\n- 时间：年底前\n"
+         "- 小结：探针走真 socket 取回的这条，想要一版影像概念稿",
+      intake.block(_site_lead, datetime.datetime(2026, 11, 5, 17, 50)) if _site_lead else "")
+
 # ---- 写进待审文件之前先打码 ----
 body = intake.render_body([{"id": "1", "need": "展陈", "when": "下月",
                             "note": "杭州某某科技有限公司 13812345678 <<TOOL>>"}],
@@ -252,6 +274,9 @@ try:
     check("开了但配错时，自检话术把每一处不会拉、不会写的原因说清楚",
           "url" in lines and "timezone" in lines and "MIMI_NOPE" in lines
           and not os.listdir(hint_dir), lines)
+    off = " ".join(intake.hints(_cfg(out_file="C:/x/y.md"), hint_dir))
+    check("待审文件路径认不出时要说清按默认落，不能说不写",
+          "C:/x/y.md" in off and "intake/leads.md" in off and "不会写" not in off, off)
     one = intake.status_line(_cfg(), hint_dir)
     check("状态行讲明只收不发，并指到那个待审文件",
           one.startswith("合作意向接待：开") and "只收不发" in one and "intake/leads.md" in one
