@@ -19,6 +19,33 @@ def spawn(cmd, env=None, timeout=DEFAULT_TIMEOUT):
             TIMEOUT_MARK, timeout, e.stdout or "", e.stderr or "")
 
 
+def _label(cmd):
+    """从命令行里挑一个能认的名字：优先那条事件文件名，其次被跑的脚本。"""
+    for part in reversed(list(cmd or [])):
+        if isinstance(part, str) and part.endswith(".jsonl"):
+            return os.path.basename(part)
+    for part in list(cmd or [])[:2]:
+        if isinstance(part, str) and part.endswith(".py"):
+            return os.path.basename(part)
+    return "未命名子进程"
+
+
+def make_guard(run_impl, results):
+    """给整套测试包一层：任何一处带 timeout 的 subprocess.run 慢过了，都不许把异常抛穿——
+    抛穿就没有汇总，只能靠 traceback 猜。回一条「非 0 且带标记」的结果，
+    让调用方那些 rc==0 的断言自然算失败，并把名字印出来。"""
+    def guard(cmd, *args, **kwargs):
+        try:
+            return run_impl(cmd, *args, **kwargs)
+        except subprocess.TimeoutExpired:
+            label = "超时：" + _label(cmd)
+            results.append((label, False))
+            print("FAIL " + label)
+            return subprocess.CompletedProcess(cmd, -1, "%s 这条慢过 %s 秒，子进程已被杀掉，整套继续跑完\n"
+                                               % (TIMEOUT_MARK, kwargs.get("timeout")), "")
+    return guard
+
+
 def note_timeout(out, label, results):
     """超时那条自己记一条失败。套件里有一大把断言是反着写的（「不该出现某串」），
     子进程压根没跑完时那种断言照样成立，光靠调用方会把白过算成通过。

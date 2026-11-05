@@ -27,6 +27,7 @@ FAKE = {"im +chat-messages-list": {"ok": True, "data": {"messages": [{"create_ti
         "im +messages-mget": {"ok": True, "data": {"messages": [{"msg_type": "file"}]}}}
 FP = os.path.join(T, "fake.json"); json.dump(FAKE, open(FP, "w", encoding="utf-8"), ensure_ascii=False)
 results = []
+_run = harness.make_guard(subprocess.run, results)  # 整套里每一处带 timeout 的子进程都过这层
 def run(events, extra_args=(), name="", cfg_path=None, stream=False, extra_env=None):
     p = os.path.join(T, name + ".jsonl")
     open(p, "w", encoding="utf-8").write("\n".join(json.dumps({"event": e}, ensure_ascii=False) for e in events) + "\n")
@@ -216,7 +217,7 @@ check("进度：撤回失败则退回把状态改成已完成",
       and any("✅ 已完成，用时" in l for l in o.splitlines() if "[dry-run] patch dry_status_s11" in l), o)
 FAKE_LARK = os.path.join(FW, "tests", "fake_lark_cli.py")
 def _fake_lark(*args):
-    return subprocess.run([sys.executable, FAKE_LARK, *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return _run([sys.executable, FAKE_LARK, *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
 _no = _fake_lark("im", "messages", "delete", "--message-id", "sid")
 _patch = _fake_lark("im", "messages", "patch", "--message-id", "sid")
 _react = _fake_lark("im", "reactions", "delete", "--message-id", "sid", "--reaction-id", "rid")
@@ -237,7 +238,7 @@ p.c["delete_status_after_reply"] = True
 print("RECALL_OK" if p.recall_status() else "RECALL_FAIL")
 """
 _recall_env = dict(os.environ, AGENTBOT_RECALL_CFG=CP, AGENTBOT_FAKE_LARK_CLI=FAKE_LARK, AGENTBOT_FAKE_LARK_LOG=_recall_log)
-_rr = subprocess.run([sys.executable, "-c", _recall_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=_recall_env, timeout=60)
+_rr = _run([sys.executable, "-c", _recall_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=_recall_env, timeout=60)
 _rargs = json.loads(open(_recall_log, encoding="utf-8").read().strip().splitlines()[-1]) if os.path.isfile(_recall_log) else []
 check("撤回命令带 --yes，撤回成功",
       "RECALL_OK" in (_rr.stdout or "") and _rargs[:3] == ["im", "messages", "delete"] and "--yes" in _rargs
@@ -439,7 +440,7 @@ o = run([ev("sk8", '<<FAKE_TOOL>>{"tool":"skill_read","name":"../../OUTSIDE_SECR
 check("路径穿越被拒：不读目录外的文件", _unit_ok and "技能名字不合法" in o and "OUTSIDE_SECRET_MARKER" not in o and "Traceback" not in o, _unit_msg + "\n" + o)
 write_skill("ok-skill", "合法的示例技能，用来检查数量。", "# 好\n\n步骤。\n", directory="skills_check")
 write_skill("BadName", "这个名字有大写，不合法。", "# 坏例子\n\n步骤。\n", directory="skills_check", name="BadName")
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), skcfg("sk_check", directory="skills_check"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), skcfg("sk_check", directory="skills_check"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("--check：列出技能数量，并报告格式不合法的技能", "skills enabled=True 数量=1 不合法=1" in _co and "FAIL skill BadName" in _co and "小写" in _co, _co)
 write_skill("progress-table", "查团队进度表。", "# 查进度表\n\n正文标记ONLY_PROG。\n", directory="skills_only", triggers=["进度表"])
@@ -459,7 +460,7 @@ check("skills.only 点名之后，目录、预放和 skill_read 都只认这几�
       ps and "meeting-minutes：整理会议纪要" in ps[0] and "progress-table" not in ps[0]
       and "ONLY_PROG" not in ps[0] and _sk.PRELOAD_MARK not in ps[0]
       and "没有这个技能" in o and "ONLY_PROG" not in o and "ONLY_MEET" in o, o)
-_only_chk = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), skcfg("sk_only_chk", directory="skills_only", only=["no-such-skill"]), "--check"],
+_only_chk = _run([sys.executable, os.path.join(FW, "agentbot.py"), skcfg("sk_only_chk", directory="skills_only", only=["no-such-skill"]), "--check"],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 _only_out = (_only_chk.stdout or "") + (_only_chk.stderr or "")
 check("skills.only 写了不存在的名字时 --check 只提示，不因此把技能判失败",
@@ -724,7 +725,7 @@ def run_acp(events, name, cfg_path, extra_env=None, args=()):
     env = dict(os.environ, AGENTBOT_FAKE_LARK=FP, AGENTBOT_ACP_TRACE=trace, AGENTBOT_AGENT_CMD=json.dumps([sys.executable, FAKE_ACP]))
     env.pop("AGENTBOT_FAKE_AGENT", None); env.pop("AGENTBOT_FAKE_DUMP_PROMPT", None)
     if extra_env: env.update(extra_env)
-    r = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), cfg_path, "--dry-run", p, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=90)
+    r = _run([sys.executable, os.path.join(FW, "agentbot.py"), cfg_path, "--dry-run", p, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=90)
     return (r.stdout or "") + (r.stderr or ""), load_trace(trace), r.returncode
 def prompts_of(tr):
     return [e for e in tr if e.get("event") == "prompt"]
@@ -980,7 +981,7 @@ g["handle"](dict(base, message_id="ac15", root_id="ac14", content="@%s 再问档
 ''' % (FP, os.path.join(T, "acp_snap.trace"), sys.executable, FAKE_ACP, FW, acfg("acp_snap", memory_on=True), os.path.join(FW, "agentbot.py"), CH, json.dumps(M), BN, os.path.join(T, "memory", "groups", CH, "GROUP.md"), BN)
 clear_trace(os.path.join(T, "acp_snap.trace"))
 env = dict(os.environ); env.pop("AGENTBOT_FAKE_AGENT", None); env.pop("AGENTBOT_FAKE_DUMP_PROMPT", None)
-pr = subprocess.run([sys.executable, "-c", snap_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+pr = _run([sys.executable, "-c", snap_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
 o = (pr.stdout or "") + (pr.stderr or ""); tr = load_trace(os.path.join(T, "acp_snap.trace")); ps = prompts_of(tr)
 check("会话开始时冻结群档案，中途改档案不进同一会话",
       len(ps) == 2 and "SNAP_OLD" in ps[0]["text"] and "SNAP_NEW" not in ps[0]["text"]
@@ -1008,7 +1009,7 @@ g["handle"](dict(base, message_id="acpre1", root_id="acpre0", content="@%s 看�
 ''' % (FP, _pre_trace, sys.executable, FAKE_ACP, FW, os.path.join(T, "acp_pre.json"), os.path.join(FW, "agentbot.py"), CH, json.dumps(M), BN, os.path.join(T, "memory", "groups", CH, "GROUP.md"), BN)
 clear_trace(_pre_trace)
 env = dict(os.environ); env.pop("AGENTBOT_FAKE_AGENT", None); env.pop("AGENTBOT_FAKE_DUMP_PROMPT", None)
-pr = subprocess.run([sys.executable, "-c", pre_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+pr = _run([sys.executable, "-c", pre_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
 o = (pr.stdout or "") + (pr.stderr or ""); tr = load_trace(_pre_trace); ps = prompts_of(tr)
 _t0 = ps[0]["text"] if len(ps) > 0 else ""
 _t1 = ps[1]["text"] if len(ps) > 1 else ""
@@ -1032,7 +1033,7 @@ time.sleep(1.6)
 g["handle"](dict(base, message_id="idle1", root_id="idle0", content="@%s 第二句"))
 ''' % (FP, idle_trace, sys.executable, FAKE_ACP, acfg("acp_idle", acp_idle_sec=1), os.path.join(FW, "agentbot.py"), CH, json.dumps(M), BN, BN)
 clear_trace(idle_trace)
-pr = subprocess.run([sys.executable, "-c", idle_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+pr = _run([sys.executable, "-c", idle_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
 o = (pr.stdout or "") + (pr.stderr or ""); ids, news = new_ids(load_trace(idle_trace))
 check("空闲超过 acp_idle_sec：同一话题重新开会话",
       len(news) == 2 and len(ids) == 2 and ids[0] != ids[1] and "acp session drop idle" in o, o + str(ids))
@@ -1056,16 +1057,16 @@ check("旧的 mode=ask 行为不变：仍是一次性 --mode ask",
 o, tr, rc = run_acp([ev("plan1", "计划")], "legacy_plan", acfg("legacy_plan", mode="plan"))
 check("旧的 mode=plan 仍把 --mode plan 传给一次性进程",
       any(e.get("event") == "argv" and e["argv"][e["argv"].index("--mode") + 1] == "plan" and "-p" in e["argv"] for e in tr) and "acp ready" not in o, str(tr)[:800])
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), ACP_CFG, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), ACP_CFG, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                      env=dict(os.environ, AGENTBOT_AGENT_CMD=json.dumps([sys.executable, FAKE_ACP]), AGENTBOT_ACP_TRACE=os.path.join(T, "acp_check.trace")), timeout=60)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("--check 在 mode=acp 时做 initialize 握手", "OK   acp" in _co and "protocolVersion=1" in _co and "FAIL acp" not in _co, _co)
 _bad = dict(os.environ, AGENTBOT_AGENT_CMD=json.dumps([sys.executable, FAKE_ACP]), AGENTBOT_ACP_FAIL_INIT="1")
 _bad.pop("AGENTBOT_FAKE_AGENT", None)
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), ACP_CFG, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=_bad, timeout=60)
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), ACP_CFG, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=_bad, timeout=60)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("--check 握手失败时报告原因并且退出码非 0", _cr.returncode != 0 and "FAIL acp" in _co and "process exited" in _co, _co)
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("check_oneshot", mode="oneshot"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("check_oneshot", mode="oneshot"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("mode=oneshot 的 --check 不启动 ACP", "FAIL acp" not in _co and "OK   acp" not in _co and "acp spawn" not in _co, _co)
 o, tr, rc = run_acp([ev("par%d" % i, "并行%d" % i) for i in range(2)], "acp_par", ACP_CFG, args=("--parallel",))
@@ -1117,7 +1118,7 @@ if not (count["n"] == 1 and same_p and same_pool and not errs):
     sys.exit(1)
 ''' % (FW, _race_p, os.path.join(FW, "agentbot.py"))
 _race_env = dict(os.environ); _race_env.pop("AGENTBOT_FAKE_AGENT", None); _race_env.pop("AGENTBOT_FAKE_DUMP_PROMPT", None)
-_rr = subprocess.run([sys.executable, "-c", _race_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=_race_env, timeout=30)
+_rr = _run([sys.executable, "-c", _race_src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=_race_env, timeout=30)
 o = (_rr.stdout or "") + (_rr.stderr or "")
 check("并发懒初始化：8 个线程同时取 provider 和 pool，只构造一次且是同一个对象",
       _rr.returncode == 0 and "POOL_COUNT 1 END" in o and "SAME_PROVIDER True" in o and "SAME_POOL True" in o and "ERRS 0 END" in o, o)
@@ -1145,7 +1146,7 @@ def run_oa(events, name, cfg_path, retries_env=None, progress=False):
     open(p, "w", encoding="utf-8").write("\n".join(json.dumps({"event": e}, ensure_ascii=False) for e in events) + "\n")
     env = dict(os.environ, AGENTBOT_FAKE_LARK=FP, UNIT_OPENAI_KEY=_OA_SECRET)
     env.pop("AGENTBOT_FAKE_AGENT", None); env.pop("AGENTBOT_FAKE_DUMP_PROMPT", None)
-    r = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), cfg_path, "--dry-run", p], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=90)
+    r = _run([sys.executable, os.path.join(FW, "agentbot.py"), cfg_path, "--dry-run", p], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=90)
     return (r.stdout or "") + (r.stderr or ""), r.returncode
 def oa_hits(model):
     return [h for h in _oa.hits if h.get("model") == model]
@@ -1190,16 +1191,16 @@ o, rc = run_oa([ev("oa7", "请重试")], "oa_retry", ocfg("oa_retry", model="fla
 check("openai_compat：网络错误按 network_retries 重试后再答",
       "重试成功的答案" in block(o, "oa7") and "openai_compat network" in o and len(oa_hits("flaky-net")) == _before + 2 and _OA_SECRET not in o, o)
 _miss = dict(os.environ); _miss.pop("UNIT_OPENAI_KEY", None); _miss.pop("AGENTBOT_FAKE_AGENT", None)
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), ocfg("oa_miss"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=_miss, timeout=30)
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), ocfg("oa_miss"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=_miss, timeout=30)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("--check：openai_compat 缺环境变量时报名字、不发请求",
       _cr.returncode != 0 and "FAIL openai_compat" in _co and "UNIT_OPENAI_KEY" in _co and "未设置" in _co and "OK   cursor-agent" not in _co, _co)
 _ok = dict(os.environ, UNIT_OPENAI_KEY=_OA_SECRET); _ok.pop("AGENTBOT_FAKE_AGENT", None)
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), ocfg("oa_ok"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=_ok, timeout=30)
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), ocfg("oa_ok"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=_ok, timeout=30)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("--check：openai_compat 环境变量已设置并发短请求，输出不含密钥",
       "OK   openai_compat" in _co and "已设置" in _co and _OA_SECRET not in _co and "FAIL openai_compat" not in _co and "OK   cursor-agent" not in _co, _co)
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), ocfg("oa_bad", model="deny-auth"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=_ok, timeout=30)
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), ocfg("oa_bad", model="deny-auth"), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=_ok, timeout=30)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("--check：短请求 401 时失败且不含密钥", _cr.returncode != 0 and "FAIL openai_compat" in _co and "401" in _co and _OA_SECRET not in _co, _co)
 _old = json.loads(json.dumps(cfg)); _old.pop("model_provider", None)
@@ -1227,7 +1228,7 @@ o = run([ev("leg2", '<<FAKE_TOOL>>{"tool":"docs_create","args":{"title":"周报"
 check("旧键 doc_folder_token 仍能提议新建文档", "确认" in o and "新建文档" in o and "还没配置专用文档文件夹" not in o, o)
 o = run([ev("leg3", '<<FAKE_TOOL>>{"tool":"docs_append","args":{"doc":"doxTEST","markdown":"x"}}<<END>> 追加', sender_id="user_admin")], name="legacy_append", cfg_path=_LEG)
 check("旧键 doc_append_tokens 仍能提议追加", "确认" in o and "末尾追加" in o and "不在可写白名单" not in o and "还没配置允许追加" not in o, o)
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), _LEG, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), _LEG, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("--check：旧配置键给出改名提示，且不因此失败",
       all(s in _co for s in ("HINT tools.doc_search", "docs_search", "HINT tools.doc_read", "docs_read",
@@ -1237,13 +1238,13 @@ check("--check：旧配置键给出改名提示，且不因此失败",
       and not any(("doc_search" in l or "doc_folder" in l or "doc_append_tokens" in l) and l.startswith("FAIL") for l in _co.splitlines()), _co)
 _BOTH = _legacy_cfg("legacy_both", both=True)
 o = run([ev("leg4", '<<FAKE_TOOL>>{"tool":"docs_search","args":{"query":"进度"}}<<END>> 找文档')], name="legacy_both", cfg_path=_BOTH)
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), _BOTH, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), _BOTH, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("新旧键同时存在时用新名字，--check 提示删掉旧的",
       "[fake-lark] drive +search" in o and "HINT tools.doc_search 是旧名字，已忽略（在用 docs_search）" in _co, o + "\n" + _co)
 _clean = json.loads(json.dumps(cfg)); _clean["model_provider"] = "fake"
 _cleanp = os.path.join(T, "legacy_clean.json"); json.dump(_clean, open(_cleanp, "w", encoding="utf-8"), ensure_ascii=False)
-_cr = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), _cleanp, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+_cr = _run([sys.executable, os.path.join(FW, "agentbot.py"), _cleanp, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 _co = (_cr.stdout or "") + (_cr.stderr or "")
 check("--check：没有旧键时不提示", "HINT" not in _co and "OK   fake" in _co, _co)
 _ps = open(os.path.join(FW, "scripts", "start.ps1"), encoding="utf-8-sig").read()
@@ -1372,19 +1373,19 @@ check("admit 无法识别时按 confirm 处理，不调模型",
 p2 = {"message_id": "ajp", "chat_id": "chat_p2p_aj", "chat_type": "p2p", "message_type": "text", "sender_id": "user_anyone", "sender_type": "user", "content": "私聊仍可用"}
 o = run([p2], name="aj_p2p", cfg_path=acfg("aj_p2p"))
 check("自动认群不改变私聊：允许的人不用 @ 也能问", "reply ajp" in o and "sess=p2p:chat_p2p_aj" in o, o)
-_co = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("aj_chk_static", chat_ids=[CH], auto=True, admit="open"), "--check"],
+_co = _run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("aj_chk_static", chat_ids=[CH], auto=True, admit="open"), "--check"],
                      capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 _co = (_co.stdout or "") + (_co.stderr or "")
 check("--check：chat_ids 非空时说明自动认群被忽略，且不因此失败",
       "OK   chats static chat_ids=1（auto_join 已忽略）" in _co and "HINT chats.auto_join 已开启" in _co
       and not any(l.startswith("FAIL chats") for l in _co.splitlines()), _co)
-_co = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("aj_chk_on", base=os.path.join(T, "iso_chk_on")), "--check"],
+_co = _run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("aj_chk_on", base=os.path.join(T, "iso_chk_on")), "--check"],
                      capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 _co = (_co.stdout or "") + (_co.stderr or "")
 check("--check：自动认群生效时报告门槛，不把待认群说成失败",
       "OK   chats auto_join admit=confirm admitted=0 pending=0" in _co and "HINT chats.auto_join 已开启" not in _co
       and not any(l.startswith("FAIL chats") for l in _co.splitlines()), _co)
-_co = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("aj_chk_empty", allowed={}, base=os.path.join(T, "iso_chk_empty")), "--check"],
+_co = _run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("aj_chk_empty", allowed={}, base=os.path.join(T, "iso_chk_empty")), "--check"],
                      capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 _co = (_co.stdout or "") + (_co.stderr or "")
 check("--check：confirm 且没有白名单时提示没人能认群", "HINT chats.admit=confirm" in _co and "/认群" in _co, _co)
@@ -1413,7 +1414,7 @@ def run_sync(name, admit, listed, seed=(), fail=False):
     pth = os.path.join(T, name + ".json"); json.dump(c, open(pth, "w", encoding="utf-8"), ensure_ascii=False)
     env = dict(os.environ, CFG=pth, LISTED=json.dumps(listed, ensure_ascii=False), SEED=json.dumps(list(seed), ensure_ascii=False), LIST_FAIL="1" if fail else "")
     env["AGENTBOT_FAKE_AGENT"] = "0.1"
-    r = subprocess.run([sys.executable, "-c", SYNC], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+    r = _run([sys.executable, "-c", SYNC], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
     return (r.stdout or "") + (r.stderr or ""), base
 def sync_map(out):
     line = [l for l in out.splitlines() if l.startswith("SYNC ")]
@@ -1443,7 +1444,7 @@ check("open：启动时列出的群直接认下，但不发消息；忘过的群
 o, base = run_sync("sync_fail", "confirm", [], seed=({"chat_id": "oc_keep", "status": "admitted"},), fail=True)
 check("列出群失败时保留已认记录，不清空",
       sync_map(o).get("oc_keep") == "admitted" and "chat list unavailable" in o, o)
-_keys = subprocess.run([sys.executable, "-c", """
+_keys = _run([sys.executable, "-c", """
 import os, sys, json
 sys.argv = ['agentbot.py', os.environ['CFG']]
 import agentbot
@@ -1649,7 +1650,7 @@ _zp = os.path.join(_slip, "kb_inbox", "b.zip")
 with zipfile.ZipFile(_zp, "w") as zf:
     zf.writestr("MANIFEST.json", json.dumps(_man))
     zf.writestr("ok.md", _ok); zf.writestr("../escape.md", _bad); zf.writestr("C:/evil.md", _bad)
-_slip_out = subprocess.run([sys.executable, os.path.join(FW, "kb_sync.py"), _sc_path, "--inbox"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+_slip_out = _run([sys.executable, os.path.join(FW, "kb_sync.py"), _sc_path, "--inbox"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 _slip_txt = (_slip_out.stdout or "") + (_slip_out.stderr or "")
 _staged = []
 for _root, _dirs, _files in os.walk(os.path.join(_slip, "kb_staging")):
@@ -1705,14 +1706,14 @@ check("context_budget_chars=0 时只按轮数保留",
 _hc = json.loads(json.dumps(cfg)); _hc["p2p"] = {"allow_open_ids": [], "open_to_all": True}
 _hc["chat_ids"] = [CH]; _hc["chats"] = {"auto_join": False, "admit": "confirm", "inviter_open_ids": []}
 _hcp = os.path.join(T, "hint_p2p.json"); json.dump(_hc, open(_hcp, "w", encoding="utf-8"), ensure_ascii=False)
-_co = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), _hcp, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+_co = _run([sys.executable, os.path.join(FW, "agentbot.py"), _hcp, "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 _co = (_co.stdout or "") + (_co.stderr or "")
 check("--check：私聊对所有人开放且名单为空时提示", "HINT p2p.open_to_all" in _co and "知识库" in _co, _co)
-_co = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("hint_admit_open", admit="open"), "--check"],
+_co = _run([sys.executable, os.path.join(FW, "agentbot.py"), acfg("hint_admit_open", admit="open"), "--check"],
                      capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 _co = (_co.stdout or "") + (_co.stderr or "")
 check("--check：自动认群且 admit=open 时提示", "HINT chats.admit=open" in _co, _co)
-_keys = subprocess.run([sys.executable, "-c", """
+_keys = _run([sys.executable, "-c", """
 import os, sys
 sys.argv = ['agentbot.py', os.environ['CFG']]
 import agentbot
@@ -2018,7 +2019,7 @@ def _bot_py(src, extra_env=None):
     for k, v in (extra_env or {}).items():
         if v is None: env.pop(k, None)
         else: env[k] = v
-    r = subprocess.run([sys.executable, "-c", src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+    r = _run([sys.executable, "-c", src], cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
     return (r.stdout or "") + (r.stderr or "")
 _empty = os.path.join(T, "empty_recover.jsonl"); open(_empty, "w", encoding="utf-8").write("")
 _inflight_ev = ev("inflight1", "停机前没答完的问题")
@@ -2694,63 +2695,63 @@ check("message_attachment 的错误码写入 events.jsonl，只有工具名和�
       _slow_blob)
 
 print("\n-- harness --", flush=True)
-_hn = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_harness.py")], cwd=FW)
+_hn = _run([sys.executable, os.path.join(FW, "tests", "test_harness.py")], cwd=FW)
 results.append(("测试闸：单条超时不吞掉整套汇总", _hn.returncode == 0))
-_rt = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_acp_health.py")], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+_rt = _run([sys.executable, os.path.join(FW, "tests", "test_acp_health.py")], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 check("ACP 卡死检测与配置项单测", _rt.returncode == 0, (_rt.stdout or "") + (_rt.stderr or ""))
 print("\n-- lifecycle --", flush=True)
-_lc = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_lifecycle.py")], cwd=FW)
+_lc = _run([sys.executable, os.path.join(FW, "tests", "test_lifecycle.py")], cwd=FW)
 results.append(("lifecycle 单实例与优雅停机", _lc.returncode == 0))
 print("\n-- link --", flush=True)
-_lk = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_link.py")], cwd=FW)
+_lk = _run([sys.executable, os.path.join(FW, "tests", "test_link.py")], cwd=FW)
 results.append(("长连接重连与休眠唤醒", _lk.returncode == 0))
 print("\n-- channel --", flush=True)
-_ch = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_channel.py")], cwd=FW)
+_ch = _run([sys.executable, os.path.join(FW, "tests", "test_channel.py")], cwd=FW)
 results.append(("渠道适配器", _ch.returncode == 0))
 print("\n-- notify --", flush=True)
-_nt = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_notify.py")], cwd=FW)
+_nt = _run([sys.executable, os.path.join(FW, "tests", "test_notify.py")], cwd=FW)
 results.append(("断线提醒与早晨摘要", _nt.returncode == 0))
 print("\n-- ops digest --", flush=True)
-_ops = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_ops_digest.py")], cwd=FW)
+_ops = _run([sys.executable, os.path.join(FW, "tests", "test_ops_digest.py")], cwd=FW)
 results.append(("播报", _ops.returncode == 0))
 print("\n-- intake --", flush=True)
-_ik = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_intake.py")], cwd=FW)
+_ik = _run([sys.executable, os.path.join(FW, "tests", "test_intake.py")], cwd=FW)
 results.append(("接待桥", _ik.returncode == 0))
 print("\n-- intake notify --", flush=True)
-_in = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_intake_notify.py")], cwd=FW)
+_in = _run([sys.executable, os.path.join(FW, "tests", "test_intake_notify.py")], cwd=FW)
 results.append(("意向待看提醒", _in.returncode == 0))
 print("\n-- report --", flush=True)
-_rp = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_report.py")], cwd=FW)
+_rp = _run([sys.executable, os.path.join(FW, "tests", "test_report.py")], cwd=FW)
 results.append(("用量周报", _rp.returncode == 0))
 print("\n-- feature switch --", flush=True)
-_sw = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_feature_switch.py")], cwd=FW)
+_sw = _run([sys.executable, os.path.join(FW, "tests", "test_feature_switch.py")], cwd=FW)
 results.append(("私聊开关功能", _sw.returncode == 0))
 print("\n-- confirm --", flush=True)
-_cf = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_confirm.py")], cwd=FW)
+_cf = _run([sys.executable, os.path.join(FW, "tests", "test_confirm.py")], cwd=FW)
 results.append(("写入确认方式", _cf.returncode == 0))
 print("\n-- setup wizard --", flush=True)
-_wz = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_setup_wizard.py")], cwd=FW)
+_wz = _run([sys.executable, os.path.join(FW, "tests", "test_setup_wizard.py")], cwd=FW)
 results.append(("一键安装向导", _wz.returncode == 0))
 print("\n-- observe --", flush=True)
-_ob = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_observe.py")], cwd=FW)
+_ob = _run([sys.executable, os.path.join(FW, "tests", "test_observe.py")], cwd=FW)
 results.append(("结构化日志与诊断", _ob.returncode == 0))
 print("\n-- call trace --", flush=True)
-_ct = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_calltrace.py")], cwd=FW)
+_ct = _run([sys.executable, os.path.join(FW, "tests", "test_calltrace.py")], cwd=FW)
 results.append(("调用记录", _ct.returncode == 0))
 print("\n-- retrospect --", flush=True)
-_rt = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_retrospect.py")], cwd=FW)
+_rt = _run([sys.executable, os.path.join(FW, "tests", "test_retrospect.py")], cwd=FW)
 results.append(("复盘写回", _rt.returncode == 0))
 print("\n-- skill evolve --", flush=True)
-_se = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_skill_evolve.py")], cwd=FW)
+_se = _run([sys.executable, os.path.join(FW, "tests", "test_skill_evolve.py")], cwd=FW)
 results.append(("技能自动改进", _se.returncode == 0))
 print("\n-- crew --", flush=True)
-_cr = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_crew.py")], cwd=FW)
+_cr = _run([sys.executable, os.path.join(FW, "tests", "test_crew.py")], cwd=FW)
 results.append(("主理人与专员", _cr.returncode == 0))
 print("\n-- verify --", flush=True)
-_vf = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_verify_report.py")], cwd=FW)
+_vf = _run([sys.executable, os.path.join(FW, "tests", "test_verify_report.py")], cwd=FW)
 results.append(("部署后验证", _vf.returncode == 0))
 print("\n-- verify deploy --", flush=True)
-_vd = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_verify_deploy.py")], cwd=FW)
+_vd = _run([sys.executable, os.path.join(FW, "tests", "test_verify_deploy.py")], cwd=FW)
 results.append(("部署核对一条命令", _vd.returncode == 0))
 # ---------- 知识库目录和 kb_read ----------
 import tools as _kbtools
@@ -2971,10 +2972,10 @@ print("PAGE", page)
 '''
 _page_o = _bot_py(_page_src, {"EMPTY": _empty, "AGENTBOT_CATCHUP": "1"})
 check("停机补答拉消息使用 history.page_size", "PAGE 11" in _page_o, _page_o)
-_pm = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_p2p_members.py")],
+_pm = _run([sys.executable, os.path.join(FW, "tests", "test_p2p_members.py")],
                      capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 check("私聊按群成员放行", _pm.returncode == 0, (_pm.stdout or "") + (_pm.stderr or ""))
-_se = subprocess.run([sys.executable, os.path.join(FW, "tests", "sim_e2e.py")], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+_se = _run([sys.executable, os.path.join(FW, "tests", "sim_e2e.py")], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
 _se_out = (_se.stdout or "") + (_se.stderr or "")
 check("模拟端到端：一轮多读和预算压缩", _se.returncode == 0, _se_out[-2000:])
 
@@ -3244,11 +3245,11 @@ _acp._lookup_host = _old_lookup2
 _acp.configure_web({})
 
 print("\n-- providers --", flush=True)
-_pv = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_providers.py")], cwd=FW)
+_pv = _run([sys.executable, os.path.join(FW, "tests", "test_providers.py")], cwd=FW)
 results.append(("可替换模型", _pv.returncode == 0))
 
 print("\n-- knowledge --", flush=True)
-_kb = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_knowledge.py")], cwd=FW)
+_kb = _run([sys.executable, os.path.join(FW, "tests", "test_knowledge.py")], cwd=FW)
 results.append(("分群知识库", _kb.returncode == 0))
 
 # ---------- 记忆成长：默认关。提案、审批、过期、去重、隔离、脱敏 ----------

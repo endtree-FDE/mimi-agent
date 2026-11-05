@@ -72,5 +72,34 @@ check("超时记的失败要把用例名印出来，不能只进汇总的数",
 check("上限从环境或默认里来，且默认就是原来那个 240 秒",
       harness.DEFAULT_TIMEOUT == 240, repr(harness.DEFAULT_TIMEOUT))
 
+# 七、整套里还有五十来处 subprocess.run 直接带 timeout，每一处都能把汇总带走（15:03 的
+# UTF-8 那趟就是在 tests/run_tests.py:1148 的 run_oa 上抛穿的，那条我没改到）。所以要一层
+# 谁都能用的守卫：超时不许抛，回一条「不是 0」的结果，名字照样印出来、照样记进 results。
+def _impl_raises(cmd, *a, **kw):
+    raise subprocess.TimeoutExpired(cmd, kw.get("timeout") or 90)
+
+
+_bucket3 = []
+_guard = harness.make_guard(_impl_raises, _bucket3)
+_raised = None
+_res = None
+try:
+    _res = _guard([sys.executable, os.path.join(FW, "agentbot.py"), "x.json", "--dry-run", "y.jsonl"])
+except Exception as exc:  # noqa: BLE001
+    _raised = exc
+check("守卫要把任何一处 subprocess.run 的超时接住，不许抛给整套测试",
+      _raised is None and _res is not None, "抛出了 %r" % (_raised,))
+check("超时那条要回一个非 0 的退出码，否则 rc==0 的断言会把它算成通过",
+      _raised is None and getattr(_res, "returncode", 0) != 0, repr(_res))
+check("超时那条的输出里要带标记，方便看日志的人知道这条是没跑完而不是跑歪了",
+      _raised is None and harness.TIMEOUT_MARK in (_res.stdout or ""), repr(_res))
+
+# 八、不超时的那条路要原样把结果交回去：这一层不许改变任何现有断言看到的对象形状。
+_ok = subprocess.CompletedProcess(["x"], 0, stdout="real-out", stderr="")
+_bucket4 = []
+_res2 = harness.make_guard(lambda cmd, *a, **kw: _ok, _bucket4)(["x"])
+check("没超时的要原样拿到那个结果，且不多记一条失败",
+      _res2 is _ok and _bucket4 == [], repr(_res2))
+
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)
