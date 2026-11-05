@@ -526,7 +526,7 @@ python checks/check_config.py agents/example.json
 - `interval_min`：最短多少分钟拉一次，越界退回 30，最低 15。没到点不去拉，也不算失败。
 - `timeout_sec`：一次网络等待的上限，1 到 20 秒，越界退回 8。
 - `timezone`：待审文件里那个时间按哪个时区写，认不出来就不拉。不自己造 UTC 偏移。
-- `out_file`：待审文件，相对机器人目录。绝对路径、盘符、`..` 一律退回默认的 `intake/leads.md`。这个文件已进 `.gitignore`，里面是陌生访客写的话，别提交。样子在 `intake/leads.example.md`。
+- `out_file`：待审文件，相对机器人目录。绝对路径、盘符、`..` 一律退回默认的 `intake/leads.md`。退回不是静默的：`--check` 会把你原样写的那个路径点出来，并说这一版按默认落。这个文件已进 `.gitignore`，里面是陌生访客写的话，别提交。样子在 `intake/leads.example.md`。
 
 来的一条记录认这几组字段名：`need`/`form`/`type`/`形式`/`需求类型`、`when`/`time`/`deadline`/`时间`/`档期`、`note`/`summary`/`text`/`简述`/`需求`、`page`/`path`/`source`/`来源`、`id`/`key`/`编号`。认不到就当没有那一项；三项全空的丢掉；正文里夹着客户名或手机号的整条丢掉，不等写文件时才打码。对端返坏 JSON、纯 HTML、超过 4096 字节的，整批丢掉不猜；一次最多处理 20 条。
 

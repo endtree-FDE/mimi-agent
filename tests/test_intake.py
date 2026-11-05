@@ -252,6 +252,9 @@ try:
     check("开了但配错时，自检话术把每一处不会拉、不会写的原因说清楚",
           "url" in lines and "timezone" in lines and "MIMI_NOPE" in lines
           and not os.listdir(hint_dir), lines)
+    off = " ".join(intake.hints(_cfg(out_file="C:/x/y.md"), hint_dir))
+    check("待审文件路径认不出时要说清按默认落，不能说不写",
+          "C:/x/y.md" in off and "intake/leads.md" in off and "不会写" not in off, off)
     one = intake.status_line(_cfg(), hint_dir)
     check("状态行讲明只收不发，并指到那个待审文件",
           one.startswith("合作意向接待：开") and "只收不发" in one and "intake/leads.md" in one

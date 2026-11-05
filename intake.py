@@ -56,12 +56,21 @@ def _out_file(value):
     return text[:200]
 
 
+def _out_file_asked(value):
+    """主人原样写的那个路径（没写或写的是占位符时给空），只为让自检能说清被换掉了什么。"""
+    text = str(value or "").strip().replace("\\", "/")
+    if not text or text.startswith("REPLACE_") or any(c in text for c in "\x00\r\n\t"):
+        return ""
+    return text[:200]
+
+
 def settings(cfg):
     raw = (cfg or {}).get("intake")
     if not isinstance(raw, dict):
         raw = {}
     url = _clean_url(raw.get("url"))
     timezone = str(raw.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    out_file = _out_file(raw.get("out_file"))
     return {
         "enabled": bool(raw.get("enabled")),
         "url": url,
@@ -71,7 +80,8 @@ def settings(cfg):
         "timeout": _num(raw.get("timeout_sec", 8), 8, 1, 20),
         "timezone": timezone,
         "tz_ok": digest.zone(timezone) is not None,
-        "out_file": _out_file(raw.get("out_file")),
+        "out_file": out_file,
+        "out_file_asked": _out_file_asked(raw.get("out_file")),
     }
 
 
@@ -323,8 +333,11 @@ def hints(cfg, base):
         lines.append("intake.timezone 认不出来，这一版不会拉。")
     if spec["token_env"] and not str(os.environ.get(spec["token_env"]) or "").strip():
         lines.append("intake.token_env 写了 %s，但那个环境变量是空的。不带密钥去拉，对端多半会挡。" % spec["token_env"])
-    if guard.safe_path(base, spec["out_file"]) is None:
-        lines.append("intake.out_file 认不出来（绝对路径、盘符或 ..）。待审文件不会写。")
+    if spec["out_file_asked"] and spec["out_file_asked"] != spec["out_file"]:
+        lines.append("intake.out_file 写了 %s，认不出来（绝对路径、盘符或 ..），这一版按默认 %s 落。"
+                     % (spec["out_file_asked"], spec["out_file"]))
+    elif guard.safe_path(base, spec["out_file"]) is None:
+        lines.append("intake.out_file 认不出来（绝对路径、盘符或 ..），这一版按默认 %s 落。" % _DEFAULT_OUT)
     return lines
 
 
