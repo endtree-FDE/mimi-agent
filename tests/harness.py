@@ -55,3 +55,24 @@ def note_timeout(out, label, results):
         print("FAIL " + label)
         return True
     return False
+
+
+def wait_all(procs, timeout, results, label):
+    """等一批自己 Popen 起来的进程落定。慢过了不许把 TimeoutExpired 抛给整套测试：
+    抛穿就没有汇总，只能靠 traceback 猜。杀掉、退出码按非 0 交回去，让调用方那句
+    「退出码都是 0」的断言自然算失败。一批只记一条：这一批本来就是一个用例，
+    两个进程各挂一次就印两行同样的名字，是把人往「是两个不同的失败」上带。"""
+    codes = []
+    late = 0
+    for p in procs:
+        try:
+            codes.append(p.wait(timeout=timeout))
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            codes.append(-1)
+            late += 1
+    if late:
+        results.append((label, False))
+        print("FAIL " + label)
+    return codes

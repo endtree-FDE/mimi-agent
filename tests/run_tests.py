@@ -708,7 +708,9 @@ def _trace_lines_stay_json():
     for i in (1, 2):
         env = dict(os.environ, AGENTBOT_ACP_TRACE=path, FAKE=FAKE_ACP, I=str(i))
         procs.append(subprocess.Popen([sys.executable, "-c", code], env=env))
-    codes = [p.wait(timeout=30) for p in procs]
+    # 这一处不走 subprocess.run，守卫那层包不到它；慢过 30 秒原先是一个没人接的
+    # TimeoutExpired，traceback 一穿整套就没有汇总。交回非 0 让下面那句断言自然算失败。
+    codes = harness.wait_all(procs, 30, results, "超时：trace_parts")
     files = trace_files(path)
     rows = load_trace(path)
     one_line = []
@@ -2695,8 +2697,27 @@ check("message_attachment 的错误码写入 events.jsonl，只有工具名和�
       _slow_blob)
 
 print("\n-- harness --", flush=True)
-_hn = _run([sys.executable, os.path.join(FW, "tests", "test_harness.py")], cwd=FW)
+_hn = _run([sys.executable, os.path.join(FW, "tests", "test_harness.py")], cwd=FW,
+           capture_output=True, text=True, encoding="utf-8", errors="replace")
+_hn_txt = (_hn.stdout or "") + (_hn.stderr or "")
+print(_hn_txt, end="")
+_hn_sum = None
+for _hl in reversed(_hn_txt.splitlines()):
+    _hm = re.match(r"^(\d+)/(\d+) passed$", _hl)
+    if _hm:
+        _hn_sum = (int(_hm.group(1)), int(_hm.group(2)))
+        break
+_hn_fail = [x for x in _hn_txt.splitlines() if x.startswith("FAIL ")]
 results.append(("测试闸：单条超时不吞掉整套汇总", _hn.returncode == 0))
+# 汇总只打「N/M passed」，中途印出来的那行 FAIL 是人唯一能对上号的东西。所以印的条数必须
+# 等于 M-N：多印的那几行不是失败，是闸自己那几条内部探针在喊（2026-11-05 发现 rt18 带 1 行、
+# rt20 带 2 行「FAIL dedup」「FAIL 超时：y.jsonl」，可它照样报 472/472 passed 并退 0——
+# 读日志的人会把假失败当成上一轮没落干净，反过来也就真失败混在里面看不出来）。
+# 拿不到那行「N/M passed」（超时或崩在半路）同样算这条没过：那时日志根本对不上号。
+check("测试闸：闸自己那趟印出的 FAIL 行数要和它的计数对得上",
+      _hn_sum is not None and len(_hn_fail) == _hn_sum[1] - _hn_sum[0],
+      "汇总 %r，FAIL 行 %d 条：%s" % (_hn_sum, len(_hn_fail),
+                                    " / ".join(_hn_fail[:5]) or "无"))
 _rt = _run([sys.executable, os.path.join(FW, "tests", "test_acp_health.py")], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 check("ACP 卡死检测与配置项单测", _rt.returncode == 0, (_rt.stdout or "") + (_rt.stderr or ""))
 print("\n-- lifecycle --", flush=True)
