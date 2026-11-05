@@ -4,6 +4,8 @@ import datetime, hashlib, json, os, re, subprocess, sys, tempfile, sqlite3, shut
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, FW)
 import utf8io  # noqa: F401  管道改为 UTF-8，不依赖 PYTHONUTF8 / PYTHONIOENCODING
+sys.path.insert(0, os.path.join(FW, "tests"))
+import harness  # noqa: E402  测试闸：子进程跑太久时保住整套汇总
 T = tempfile.mkdtemp(prefix="agentbot_t_"); os.makedirs(os.path.join(T, "kb"))
 # 配置模板：AGENTBOT_TEST_CFG 指定；否则用 agents/example.json（占位符配置，测试会改写到临时目录）
 _cp = os.environ.get("AGENTBOT_TEST_CFG") or os.path.join(FW, "agents", "example.json")
@@ -34,8 +36,10 @@ def run(events, extra_args=(), name="", cfg_path=None, stream=False, extra_env=N
     for k, v in (extra_env or {}).items():
         if v is None: env.pop(k, None)
         else: env[k] = v
-    r = subprocess.run([sys.executable, os.path.join(FW, "agentbot.py"), cfg_path or CP, "--dry-run", p, *extra_args], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=240)
-    return r.stdout + r.stderr
+    o = harness.spawn([sys.executable, os.path.join(FW, "agentbot.py"), cfg_path or CP,
+                       "--dry-run", p, *extra_args], env=env)
+    harness.note_timeout(o, "超时：" + (name or "未命名用例"), results)
+    return o
 def ev(mid, text, **kw):
     e = {"message_id": mid, "chat_id": CH, "chat_type": "group", "message_type": "text", "sender_id": "user_sender", "sender_type": "user", "content": "@" + BN + " " + text, "mentions": M}
     e.update(kw); return e
@@ -2689,6 +2693,9 @@ check("message_attachment 的错误码写入 events.jsonl，只有工具名和�
       and "附件问题TOKEN不要进日志" not in _slow_blob and "13812345678" not in _slow_blob and "附件正文XYZ" not in _slow_blob,
       _slow_blob)
 
+print("\n-- harness --", flush=True)
+_hn = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_harness.py")], cwd=FW)
+results.append(("测试闸：单条超时不吞掉整套汇总", _hn.returncode == 0))
 _rt = subprocess.run([sys.executable, os.path.join(FW, "tests", "test_acp_health.py")], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 check("ACP 卡死检测与配置项单测", _rt.returncode == 0, (_rt.stdout or "") + (_rt.stderr or ""))
 print("\n-- lifecycle --", flush=True)
