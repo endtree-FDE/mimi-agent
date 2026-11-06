@@ -327,5 +327,36 @@ with _Dir() as base:
           and "没发出去" not in intake_notify.status_line(_cfg(), base),
           json.dumps([again, fixed.calls, intake_notify.status_line(_cfg(), base)]))
 
+# ---- 提醒的节奏：什么时候该发、什么时候该闭嘴 ----
+# 这五格钉的是现有判据（_due / _reason / _record），不是新功能；判得出假的方式是变异，
+# 读数存 v3-upgrade-work/site-bridge-20261105/cadence-probe-0257.txt：现码 5/5；
+# 把「还没提醒过」（_record() 里的 last=0）当成「还不能提醒」→ 五格全红；
+# 换日按 UTC 算 → 只有最后一格红；去掉 min_gap 判据 → too_soon 那格连带第 3 格红。
+# T0=1730000000 在 Asia/Shanghai 是 10-27 11:33:20：下一个本地零点在 +44800 秒，
+# 下一个 UTC 零点在 +73600 秒，所以换日那格取 +44900 才判得出「按配的时区换日」。
+with _Dir() as base:
+    sent = Sender()
+    _fill(base, ["甲"])
+    cold = intake_notify.tick(_cfg(max_per_day=2), base, NAMES, T0, sent)
+    check("还没提醒过的实例（状态里 last=0）第一轮就该提醒，不被 min_gap 卡住",
+          cold["reason"] == "notified" and len(sent.kinds("user")) == 1, json.dumps(cold))
+    _fill(base, ["乙"], start=1)
+    soon = intake_notify.tick(_cfg(max_per_day=2), base, NAMES, T0 + 60, sent)
+    check("上一条提醒后一分钟内再来一条：闭嘴，而且说的是 too_soon",
+          soon["reason"] == "too_soon" and len(sent.kinds("user")) == 1, json.dumps(soon))
+    _fill(base, ["丙", "丁"], start=2)
+    second = intake_notify.tick(_cfg(max_per_day=2), base, NAMES, T0 + 3700, sent)
+    check("过了 min_gap 还能再提醒一次（当天第 2 次，次数是被用掉的）",
+          second["reason"] == "notified" and len(sent.kinds("user")) == 2, json.dumps(second))
+    _fill(base, ["戊"], start=4)
+    third = intake_notify.tick(_cfg(max_per_day=2), base, NAMES, T0 + 7300, sent)
+    check("当天次数用完就闭嘴：说的是 day_limit，且一条都没多发的",
+          third["reason"] == "day_limit" and len(sent.kinds("user")) == 2, json.dumps(third))
+    _fill(base, ["己", "庚"], start=5)
+    rolled = intake_notify.tick(_cfg(max_per_day=2), base, NAMES, T0 + 44900, sent)
+    check("换到本地第二天才放开，而且按配的时区换日不是按 UTC",
+          rolled["reason"] == "notified" and rolled["new"] == 2 and len(sent.kinds("user")) == 3,
+          json.dumps(rolled))
+
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)
