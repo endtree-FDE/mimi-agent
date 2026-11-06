@@ -295,5 +295,37 @@ check("自检、演练、诊断在提醒桥之前就返回；它拿到的是发�
 check("接线里确认走的是同一条纪律：命令先登记再分发",
       "intake_notify.handle_text" in bot and "intake_notify.is_command" in bot)
 
+# ---- 提醒一条都没发出去时，这件事得看得见 ----
+class _Log:
+    """接住 tick 写的日志，不看真发没发。"""
+
+    def __init__(self):
+        self.lines = []
+
+    def warning(self, msg, *args):
+        self.lines.append("WARNING " + (msg % args if args else msg))
+
+    def info(self, msg, *args):
+        self.lines.append("INFO " + (msg % args if args else msg))
+
+
+with _Dir() as base:
+    _fill(base, ["甲", "乙"])
+    broken, log = Sender("fail"), _Log()
+    got = intake_notify.tick(_cfg(), base, NAMES, T0, broken, log=log)
+    check("提醒一条都没发出去时照实回 send_failed，不算成已提醒",
+          got["reason"] == "send_failed" and got["sent"] == 0, json.dumps(got))
+    check("发失败要在本机日志里留一行，没人盯着也能事后看见",
+          any("没发出去" in l for l in log.lines), json.dumps(log.lines))
+    line = intake_notify.status_line(_cfg(), base)
+    check("/状态 那行能看到最近有几次提醒没发出去",
+          "没发出去" in line and "1 次" in line, line)
+    fixed = Sender()
+    again = intake_notify.tick(_cfg(), base, NAMES, T0 + 3600, fixed, log=log)
+    check("发失败不占当天的提醒次数，下一趟照旧再试；发成了那句就不再说没发出去",
+          again["reason"] == "notified" and len(fixed.kinds("user")) == 1
+          and "没发出去" not in intake_notify.status_line(_cfg(), base),
+          json.dumps([again, fixed.calls, intake_notify.status_line(_cfg(), base)]))
+
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)

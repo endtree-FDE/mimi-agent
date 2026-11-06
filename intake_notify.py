@@ -277,6 +277,14 @@ def tick(cfg, base, names, now=None, sender=None, served=None, log=None):
             text = guard.neutralize(guard.redact(text, names))
             results = _send_owner(sender, spec, text, now)
             if "ok" not in results and "unknown" not in results:
+                # 一条都没发出去：不记提醒次数、不发确认码，但要把这件事留在账上——
+                # 线上那条 sender 是会失败的（健康告警自己的日志里就有发不出去的记录），
+                # 悄悄丢掉等于主人永远不知道有这批意向。
+                state.update({"failed": int(state.get("failed") or 0) + 1})
+                _save(path, state)
+                if log:
+                    log.warning("intake_notify 提醒没发出去（连续第 %d 次），%d 条还留在待看里",
+                                state["failed"], total)
                 return {"reason": "send_failed", "new": total, "sent": 0}
             codes[code] = {"code": code, "items": [x[0] for x in picked], "owners": spec["owners"],
                            "chats": spec["chats"], "created": now, "expires_at": now + spec["ttl"],
@@ -286,7 +294,8 @@ def tick(cfg, base, names, now=None, sender=None, served=None, log=None):
             count = notice_state if isinstance(notice_state, int) else 0
             if str(state.get("day") or "") != day:
                 count = 0
-            state.update({"codes": codes, "day": day, "notices": count + 1, "last": now})
+            state.update({"codes": codes, "day": day, "notices": count + 1, "last": now,
+                          "failed": 0})
             _save(path, state)
             if log:
                 log.info("intake_notify noticed %d leads to %d owners", total, len(spec["owners"]))
@@ -443,6 +452,8 @@ def status_line(cfg, base):
         return ""
     state = _load(_state_path(base))
     handled = len([x for x in (state.get("handled") or []) if x])
+    failed = int(state.get("failed") or 0)
+    back = "最近有 %d 次提醒没发出去（意向还留在待看里）。" % failed if failed else ""
     return ("合作意向提醒：开，只私聊提醒主人，本人回确认码之前不发群。"
-            "现在有 %d 条等你确认（今天最多提醒 %d 次），处理过 %d 条，不回复就不发。") % (
-        len(pending(cfg, base)), spec["max_per_day"], handled)
+            "现在有 %d 条等你确认（今天最多提醒 %d 次），处理过 %d 条，不回复就不发。%s") % (
+        len(pending(cfg, base)), spec["max_per_day"], handled, back)
