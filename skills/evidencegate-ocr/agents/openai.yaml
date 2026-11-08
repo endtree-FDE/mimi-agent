@@ -1,0 +1,4 @@
+interface:
+  display_name: "EvidenceGate OCR"
+  short_description: "Gate document AI evidence before enterprise use"
+  default_prompt: "Use $evidencegate-ocr to validate this document-AI output and route unsafe evidence to human review."

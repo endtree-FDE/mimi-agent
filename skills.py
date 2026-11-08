@@ -1,6 +1,6 @@
 # 技能层：每个技能一个文件夹，里面一份 SKILL.md（agentskills.io：YAML 头含 name、description，正文是步骤）。
 # 配置（默认关闭）：
-#   "skills": {"enabled": false, "dir": "skills", "only": [], "index_budget_chars": 800,
+#   "skills": {"enabled": false, "dir": "skills", "only": [], "index_budget_chars": 900,
 #              "preload": true, "preload_budget_chars": 3000}
 # only 不写或空列表：合法技能全部选用。非空才收窄目录、预放和 skill_read。
 # 关闭时 prompt_block() 和 preload_block() 都返回空字符串，调用方不往提示词里加任何东西。
@@ -249,11 +249,12 @@ class SkillSet:
         self.enabled = bool(s.get("enabled", False))
         self.dir_name = s.get("dir") or "skills"
         try:
-            self.budget = int(s.get("index_budget_chars", 800))
+            # 2026-11-08 加入第 9 个技能（evidencegate-ocr）后，目录默认预算从 800 提到 900。
+            self.budget = int(s.get("index_budget_chars", 900))
         except (TypeError, ValueError):
-            self.budget = 800
+            self.budget = 900
         if self.budget <= 0:
-            self.budget = 800
+            self.budget = 900
         # 预放默认开，但只有 enabled 为 true 时 preload_block 才会返回正文
         self.preload = bool(s.get("preload", True))
         try:

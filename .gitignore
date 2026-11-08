@@ -18,6 +18,15 @@ memory/
 bot.pid
 *.pid
 
+# 本地会话的临时产物（测试输出、校验快照）。中间件只留在本机。
+.temp/
+
+# 播报运行产物：修数脚本和 pending 备份是本机运维痕迹，不是仓库内容。
+broadcast/_*.ps1
+broadcast/_pending_stdout.tmp
+broadcast/*.bak*
+broadcast/*.bak-*
+
 # 知识库实数据。只保留空目录说明。
 kb/*
 !kb/请把资料放在这里.md

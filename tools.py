@@ -1,5 +1,5 @@
 # 工具层：只允许白名单内的 lark-cli 命令，统一 --as bot；写操作要确认；全部写审计日志；缺权限优雅降级。
-import json, os, re, sqlite3, subprocess, struct, time, random, threading, datetime, glob, shutil, zipfile
+import json, os, re, sqlite3, subprocess, struct, tempfile, time, random, threading, datetime, glob, shutil, zipfile
 import confirm_mode, guard, skills, usage
 from channels.base import TOOL_CAPS
 
@@ -42,7 +42,7 @@ SCOPE_HINT = {
     "calendar_update": "calendar:calendar.event:update", "calendar_delete": "calendar:calendar.event:delete",
     "base_create": "base:record:create", "merge_forward": "im:message:readonly",
 }
-READ_TOOLS = {"history", "docs_read", "docs_search", "calendar_read", "base_read", "message_attachment", "kb_read", "kb_search", "web_search"}
+READ_TOOLS = {"history", "docs_read", "docs_search", "calendar_read", "base_read", "message_attachment", "kb_read", "kb_search", "web_search", "evidencegate_check"}
 _KB_EXT = {".md", ".txt", ".markdown"}
 WRITE_TOOLS = {"docs_create", "docs_append", "calendar_create", "calendar_create_batch", "calendar_update", "calendar_delete", "base_create"}
 _CAL_FOLLOW = {"calendar_create_batch", "calendar_update", "calendar_delete"}
@@ -80,6 +80,7 @@ TOOL_DOC = """可用工具（只读工具同一轮可以输出多行，每行一
 - calendar_read {"start":"ISO8601","end":"ISO8601"}：查看团队日历日程
 - base_read {"keyword":"可选"}：查询团队多维表格记录
 - kb_read {"path":"知识库内的相对路径"}：读取本机器人知识库里的 md 或 txt。不要用 ..、绝对路径或盘符
+- evidencegate_check {"path":"实例内相对路径"} 或 {"candidate":"模型输出的 JSON 文本"}：用 EvidenceGate 门禁校验文档 AI 输出，返回三路由（ACCEPT_CANDIDATE / HUMAN_REVIEW / MODEL_OUTPUT_INVALID）与字段证据。回答发票、票据、合同等图片或文件内容前先用它；路由和证据必须原样引用，不得软化（默认关；配置 tools.evidencegate_check.enabled=true 后启用）
 - docs_create {"title":"标题","markdown":"正文"}：在团队专用文件夹新建文档（需发起人确认）
 - docs_append {"doc":"文档 token","markdown":"追加内容"}：在白名单文档末尾追加（需确认）
 - calendar_create {"summary":"标题","start":"ISO8601","end":"ISO8601","description":"可选","notify_all":false}：在团队日历建一个日程（需确认，不邀请任何人）
@@ -205,6 +206,33 @@ def kb_catalog(base, cfg, names=()):
     if not rows: return ""
     header = "知识库目录（只有文件名和标题，正文要用 kb_read 读取；没有列出的文件不要编造）："
     return _fit_catalog(header, rows, kb_index_budget(cfg))
+
+def _eg_summary(j):
+    """把 EvidenceGate 的 JSON 输出压成给模型看的中文摘要。路由原样引用，不软化。"""
+    status = str(j.get("status") or "MODEL_OUTPUT_INVALID")
+    if status == "ACCEPT_CANDIDATE":
+        head = "门禁路由：ACCEPT_CANDIDATE（候选结构完整、无已知冲突；字段仍需人工确认后才可写入）"
+    elif status == "HUMAN_REVIEW":
+        head = "门禁路由：HUMAN_REVIEW（存在缺失、裁切、遮挡或冲突证据，建议人工复核后再决定）"
+    else:
+        head = "门禁路由：MODEL_OUTPUT_INVALID（输出无效：缺字段、格式错或含未知字段；请重新生成或让用户重发清晰图片）"
+    lines = [head, "契约：%s" % (j.get("schema_id") or "")]
+    errs = list(j.get("contract_errors") or []) + list(j.get("business_rule_errors") or [])
+    if errs:
+        brief = "；".join("%s：%s" % (e.get("field") or e.get("id") or e.get("code"), e.get("message") or "") for e in errs[:10])
+        lines.append("问题 %d 项：%s" % (len(errs), brief))
+    fields = j.get("fields")
+    if isinstance(fields, dict) and fields:
+        parts = []
+        for name, f in list(fields.items())[:20]:
+            v = f.get("value") if isinstance(f, dict) else f
+            st = f.get("final_status") if isinstance(f, dict) else ""
+            loc = f.get("source_text") if isinstance(f, dict) else None
+            parts.append("%s=%s（%s%s）" % (name, json.dumps(v, ensure_ascii=False)[:40], st,
+                                           ("，证据：%s" % str(loc)[:60]) if loc else ""))
+        lines.append("字段：" + "；".join(parts))
+    lines.append("以上为门禁结论：回答时必须引用路由与证据原文，不得软化或改写；本工具不发消息、不写业务。")
+    return "\n".join(lines)
 
 class Tools:
     def __init__(self, cfg, base, lark_exe, log, dry=False):
@@ -411,6 +439,53 @@ class Tools:
         except OSError:
             raise ToolError("这个文件暂时读不出来")
         return clip_body(guard.neutralize(guard.redact(raw, self.names)), limit)
+
+    def _evidencegate_check(self, a, ctx):
+        """EvidenceGate 门禁：校验一份文档 AI 输出 JSON，返回三路由与字段证据。
+        只读：不调模型、不发消息、不写业务状态。脚本来自 skills/evidencegate-ocr/scripts/，默认关。"""
+        spec = self.t.get("evidencegate_check") or {}
+        node = str(spec.get("node") or "node")
+        script = os.path.join(self.base, "skills", "evidencegate-ocr", "scripts", "evidence-gate-cli.mjs")
+        schema_rel = str(spec.get("schema") or "skills/evidencegate-ocr/scripts/evidence-schema.json")
+        schema_path = guard.safe_path(self.base, schema_rel)
+        if not os.path.isfile(script):
+            raise ToolError("门禁脚本缺失（skills/evidencegate-ocr/scripts/）")
+        if not schema_path or not os.path.isfile(schema_path):
+            raise ToolError("门禁契约文件不存在或路径不安全")
+        cand_file = None
+        try:
+            rel = str((a or {}).get("path") or "")
+            cand = str((a or {}).get("candidate") or "")
+            if rel:
+                p = guard.safe_path(self.base, rel)
+                if not p or not os.path.isfile(p):
+                    raise ToolError("候选输出文件不存在或不在实例目录内")
+                cand_file = p
+            elif cand:
+                tmpdir = os.path.join(self.base, "tmp")
+                os.makedirs(tmpdir, exist_ok=True)
+                fd, cand_file = tempfile.mkstemp(prefix="eg-cand-", suffix=".json", dir=tmpdir)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(cand)
+            else:
+                raise ToolError("给出候选输出的 path（实例内相对路径）或 candidate 内容")
+            r = run_capture([node, script, "--candidate", cand_file, "--schema", schema_path], cwd=self.base, timeout=60)
+            out = (r.stdout or "").strip()
+            if r.returncode != 0 or not out:
+                raise ToolError("门禁脚本执行失败（exit %s）" % r.returncode)
+            try:
+                j = json.loads(out)
+            except ValueError:
+                raise ToolError("门禁输出不是合法 JSON")
+            return _eg_summary(j)
+        finally:
+            if cand_file:
+                tmproot = os.path.join(self.base, "tmp")
+                if os.path.abspath(cand_file).startswith(os.path.abspath(tmproot)) and os.path.isfile(cand_file):
+                    try:
+                        os.remove(cand_file)
+                    except OSError:
+                        pass
 
     def _history(self, a, ctx):
         if ctx.get("chat_type") != "group": raise ToolError("私聊里不提供群历史查询")
