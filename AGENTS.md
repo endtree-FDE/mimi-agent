@@ -30,6 +30,8 @@
 - 定时任务（全部默认关）：`health_alert.py` 断线提醒、`digest.py` 晨报、
   `broadcast.py` 播报（不调模型）、`usage.py` 用量周报、`intake.py` 接待桥（只进不出，
   模块里根本没有发送通路）、`intake_notify.py` 意向待看提醒（私聊主人，本人回确认码才进群）。
+- `mcp_server.py` — 本地控制面（stdio MCP，只读三件套，独立进程，默认关）：由 MCP 客户端
+  拉起，读实例目录报状态与待审意向。不 import 主程序、不监听端口、没有写入口。
 - `lifecycle.py` 单实例锁与优雅停机；`observe.py` / `calltrace.py` 本机脱敏日志；
   `doctor.py` 只读诊断；`feature_switch.py` 主人私聊开关功能；
   `setup_wizard.py` / `setup_agent.py` 配置生成。
@@ -128,3 +130,5 @@ python -m pip install pypdf
   `logs/bot.log`；`--doctor`、`--dry-run`、fake provider 之外不要往真实群发测试消息。
 - 脚本里调用 `lark-cli` 必须显式传 `--name <profile>` 且与配置一致：不写会覆盖本机
   默认 profile，影响同机其他机器人。
+
+> AI生成

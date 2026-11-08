@@ -84,6 +84,7 @@ flowchart LR
 - 分群知识库检索默认关着。打开后，本群的资料能被搜到，回答会写上来源标题、章节或页码。见 [docs/知识库.md](docs/知识库.md)。
 - 技能默认关着。打开后，提示词里只放一行目录，命中触发词才放入步骤。创作流程（选题、口播、分镜、提示词、策划书、复盘）也在 `skills/` 里，默认不启用；要只用这几份时，在配置里点名。见 [docs/技能.md](docs/技能.md)。
 - 常驻模式默认关着。`agent.mode` 写成 `acp` 后，Cursor 只启动一次。见 [docs/常驻模式.md](docs/常驻模式.md)。
+- 本地控制面默认关着：`python mcp_server.py agents/你的配置.json` 用 stdio 起一个只读 MCP server，本机的 MCP 客户端能查状态、看待审合作意向。不监听端口、不发消息、没有写入口；配置里没有它的任何键，不起它就不存在。见 [docs/OpenMausBot对照与升级方案.md](docs/OpenMausBot对照与升级方案.md)。
 - 模型可以换成你自己的账号：`model_provider` 写成 `openai_compat`，密钥放在环境变量。见 [docs/模型接口.md](docs/模型接口.md)。拿去参赛时的字段对照见 [docs/用本框架参赛.md](docs/用本框架参赛.md)。
 - 也可以写 `model.provider` 换成 OpenAI 兼容接口或 Claude；不写时仍是 Cursor，行为与以前一样。见 [docs/换模型.md](docs/换模型.md)。
 
@@ -289,3 +290,5 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 本项目以 Apache-2.0 开源。你可以商用、修改、再分发，需要保留许可证和版权声明。全文见 [LICENSE](LICENSE)，版权信息见 [NOTICE](NOTICE)。
 
 本项目调用的第三方模型和工具（例如 Cursor CLI、各家模型 API、飞书开放平台）各有自己的服务条款。使用者需要自己遵守这些条款，并使用自己的账号。
+
+> AI生成

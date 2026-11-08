@@ -128,13 +128,14 @@ def redact_counted(text, names, placeholder="某客户"):
         hits += n_hit
     return text, hits
 
-_MARK = re.compile(r"(?i)<<\s*(tool|mem|fake_tool|end)\s*>>")
+_MARK = re.compile(r"(?i)<<\s*(tool|mem|fake_tool|end)(?::[^<>]{0,120}?)?\s*>>")
 _CONFIRM_FAKE = re.compile(r"(确认清空|确认|取消)[\s\u3000]*[0-9]{6}")
 
 def _fold_mark(ch):
     o = ord(ch)
     if ch in "＜〈《": return "<"
     if ch in "＞〉》": return ">"
+    if ch == "：": return ":"  # 官网那种 [[FARM:...]] 带参标记的近亲，中文输入法常打成全角
     if 0xFF21 <= o <= 0xFF3A: return chr(o - 0xFF21 + ord("A"))
     if 0xFF41 <= o <= 0xFF5A: return chr(o - 0xFF41 + ord("a"))
     if 0xFF10 <= o <= 0xFF19: return chr(o - 0xFF10 + ord("0"))
