@@ -713,7 +713,39 @@
     },
     "write": {
       "type": "object",
-      "additionalProperties": true
+      "additionalProperties": true,
+      "description": "写入开关与白名单。decision_gate 子键是 juchang 决策门禁：声明哪些写工具过门禁、各是什么等级。",
+      "properties": {
+        "decision_gate": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "写提案决策门禁（juchang-decision-gate）。默认关。tools 里没点名的写工具不过门禁；等级只能是 L1/L2/L3，写错时该写动作被拒绝（fail closed）。",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "tools": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "写工具名 → 等级（如 \"docs_create\": \"L2\"）或对象（\"level\" 加可选的 reversibility/complexity/likelihood/impact 覆盖）。"
+            },
+            "evidence_window_sec": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "本会话最近一次 evidencegate_check 路由多久内可当作证据状态。不写是 900。"
+            },
+            "evidence_default": {
+              "type": "string",
+              "enum": ["sufficient", "partial", "conflict", "missing"],
+              "description": "没有近期证据检查时的默认证据状态。不写是 sufficient。"
+            },
+            "node": {
+              "type": "string",
+              "description": "Node 可执行文件名或路径。不写用 node（或 tools.decision_gate_check.node）。"
+            }
+          }
+        }
+      }
     },
     "progress": {
       "type": "object",
@@ -807,6 +839,48 @@
             "node": {
               "type": "string",
               "description": "Node 可执行文件名或路径。不写用 node。"
+            }
+          }
+        },
+        "decision_gate_check": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "juchang 决策门禁查询：按证据状态×动作等级×可逆性算出路由与理由。只读，不执行。默认关。",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "node": {
+              "type": "string",
+              "description": "Node 可执行文件名或路径。不写用 node。脚本固定用 skills/juchang-decision-gate/scripts/。"
+            }
+          }
+        },
+        "evidence_replay_check": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "据场证据回放核对：校验回放归档 JSON 的三模式标签、哈希与缺口登记。只读。默认关。",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "node": {
+              "type": "string",
+              "description": "Node 可执行文件名或路径。不写用 node。脚本固定用 skills/juchang-evidence-replay/scripts/。"
+            }
+          }
+        },
+        "receipt_verify": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Matrix 回执核验：离线校验 caller 提供的 accepted@2 导出。结果只证明内部一致。默认关。",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "node": {
+              "type": "string",
+              "description": "Node 可执行文件名或路径。不写用 node。脚本固定用 skills/matrix-receipt-verifier/scripts/。"
             }
           }
         },

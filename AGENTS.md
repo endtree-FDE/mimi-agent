@@ -25,7 +25,15 @@
 - `confirm_mode.py` — 写入确认；`guard.py` — 脱敏与话题红线；`utf8io.py` — 管道强制 UTF-8。
 - `memory.py` — 按群长期记忆；`memory_growth.py` / `retrospect.py` / `skill_evolve.py` /
   `crew.py` — 默认关闭的增强功能（写入都要审批确认）。
-- `skills.py` + `skills/*/SKILL.md` — 技能目录与触发词，默认关。
+- `skills.py` + `skills/*/SKILL.md` — 技能目录与触发词，默认关。其中据场三门
+  （juchang-decision-gate / juchang-evidence-replay / matrix-receipt-verifier）与
+  evidencegate-ocr 一样是流程纪律型技能；决策门禁公式在上游是 TypeScript，本仓放的是
+  机械剥类型移植版，等价性由包内移植的上游测试守着。
+- `tools.py` 的三门只读工具（默认关）：`evidencegate_check` 管内容可信度（三路由），
+  `decision_gate_check` 管动作是否允许（三维路由）；写提案侧 `write.decision_gate`
+  把后者包进 propose 流程——blocked / manual_only 拒绝，其余放行进既有确认流，
+  路由依据（等级、证据状态与来源）进审计。`evidence_replay_check` 与 `receipt_verify`
+  是离线核对器，见 docs/决策门禁对照与接入方案.md。
 - `knowledge.py` / `kb_sync.py` — 分群知识库检索与待审同步，默认关。
 - 定时任务（全部默认关）：`health_alert.py` 断线提醒、`digest.py` 晨报、
   `broadcast.py` 播报（不调模型）、`usage.py` 用量周报、`intake.py` 接待桥（只进不出，

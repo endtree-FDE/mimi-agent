@@ -249,7 +249,8 @@ class SkillSet:
         self.enabled = bool(s.get("enabled", False))
         self.dir_name = s.get("dir") or "skills"
         try:
-            # 2026-11-08 加入第 9 个技能（evidencegate-ocr）后，目录默认预算从 800 提到 900。
+            # 2026-11-08 加入第 9 个技能（evidencegate-ocr）后，目录默认预算从 800 提到 900；
+            # 同日再加 juchang 三门（决策门禁/证据回放/回执核验）共 12 个，实测目录 878 字仍放得下，预算不动。
             self.budget = int(s.get("index_budget_chars", 900))
         except (TypeError, ValueError):
             self.budget = 900

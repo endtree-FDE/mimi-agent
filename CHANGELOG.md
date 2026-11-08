@@ -8,7 +8,11 @@
 
 ## [Unreleased]
 
-（这一栏现在是空的。往上数是已经发出去的版本。）
+### 添加
+
+- 据场三门（juchang-skills 第一批三个成熟 Skill 的 mimi 适配版），全部默认关：`tools.decision_gate_check`（决策门禁查询——按证据状态×动作等级×可逆性算出 automatic / after_approval / manual_only / blocked 路由与理由，只算不执行）、`tools.evidence_replay_check`（证据回放核对——校验回放归档的三模式标签、哈希与缺口登记）、`tools.receipt_verify`（Matrix 回执核验——离线校验 accepted@2 导出的投影哈希、关联与因果顺序，结果只证明内部一致）。三个技能包进 `skills/`（juchang-decision-gate / juchang-evidence-replay / matrix-receipt-verifier），脚本零依赖（Node 标准库）；决策门禁公式由上游 TypeScript 机械剥类型移植，行为等价性用上游 16 条测试原样移植验证（`node --test` 全绿）。
+- 写提案决策门禁 `write.decision_gate`，默认关。打开并在 `tools` 里声明各写工具的等级（如 `"docs_create": "L2"`）后，propose 阶段自动过门：`blocked` 拒绝提案并说明依据，`manual_only` 拒绝代做（提示人工自行操作），其余放行进既有确认流——门禁只能加严不能放宽，`automatic` 在 mimi 里仍需发起人确认（确认不能关）。证据状态优先取本会话近期 `evidencegate_check` 的路由（双门联动：门一管内容可信度、门二管动作是否允许），没有或过期用配置默认；来源（`evidencegate:HUMAN_REVIEW` / `default`）连同等级、路由、审批模式一起写进 `write_proposed` / `write_blocked` 审计。等级写错时 fail closed 拒绝该写动作。回滚：配置里删掉 `decision_gate` 段即回到现状。
+- 新增 [docs/决策门禁对照与接入方案.md](docs/决策门禁对照与接入方案.md)：2026 生产级 agent 决策门禁 / 人类在环调研（LangGraph interrupt、OpenAI Agents SDK approval、Claude Code permission、CrewAI human_input）对照 juchang 三维路由的「抄什么 / 不抄什么」18 条对照表与 mimi 适配设计（含双门关系图、具名人类→确认流映射、还没做清单）。回归测试在 [tests/test_juchang.py](tests/test_juchang.py)（47 条，含上游移植测试与双门联动端到端）。
 
 ## [0.12.0] - 2026-11-08
 
