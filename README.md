@@ -86,6 +86,7 @@ flowchart LR
 - 常驻模式默认关着。`agent.mode` 写成 `acp` 后，Cursor 只启动一次。见 [docs/常驻模式.md](docs/常驻模式.md)。
 - 本地控制面默认关着：`python mcp_server.py agents/你的配置.json` 用 stdio 起一个只读 MCP server，本机的 MCP 客户端能查状态、看待审合作意向。不监听端口、不发消息、没有写入口；配置里没有它的任何键，不起它就不存在。见 [docs/OpenMausBot对照与升级方案.md](docs/OpenMausBot对照与升级方案.md)。
 - 据场三门默认关着，配进 `skills/` 后各守一段：`decision_gate_check` 按「证据状态×动作等级×可逆性」给写提案算路由（允许进确认 / 需确认 / 阻断 / 只允许人工），`write.decision_gate` 打开后写提案自动过这道门，路由依据进审计；`evidence_replay_check` 核对回放归档（配套 `freeze-audit.mjs` 零写入冻结群记忆+审计链成可重算哈希的只读档案），`receipt_verify` 离线核验 Matrix 回执导出。三个工具都只读、零依赖（Node 标准库）。见 [docs/决策门禁对照与接入方案.md](docs/决策门禁对照与接入方案.md)。
+- 开发纪律也结构化（学 pstack 的「Encode Lessons in Structure」）：`checks/lint.py --selftest` 用坏样例证明每条 lint 规则真会红（对应「新检查必须先挂真实错误」）；项目决策有 append-only 账本 [docs/decisions.md](docs/decisions.md)。见 [docs/从pstack学到的结构防线.md](docs/从pstack学到的结构防线.md)。
 - 模型可以换成你自己的账号：`model_provider` 写成 `openai_compat`，密钥放在环境变量。见 [docs/模型接口.md](docs/模型接口.md)。拿去参赛时的字段对照见 [docs/用本框架参赛.md](docs/用本框架参赛.md)。
 - 也可以写 `model.provider` 换成 OpenAI 兼容接口或 Claude；不写时仍是 Cursor，行为与以前一样。见 [docs/换模型.md](docs/换模型.md)。
 
