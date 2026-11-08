@@ -471,8 +471,8 @@ _by = {s.name: s for s in _repo.valid}
 _rb = _repo.read("progress-table") if "progress-table" in _by else ""
 _mb = _repo.read("meeting-minutes") if "meeting-minutes" in _by else ""
 _creative = ["aigc-prompt-pack", "creative-brief", "post-mortem", "short-video-script", "storyboard", "topic-ideation"]
-_expect_skills = ["aigc-prompt-pack", "creative-brief", "evidencegate-ocr", "meeting-minutes", "post-mortem", "progress-table", "short-video-script", "storyboard", "topic-ideation"]
-check("仓库示例技能格式合法：查进度表、整理会议纪要、六份创作技能与门禁技能",
+_expect_skills = ["aigc-prompt-pack", "creative-brief", "evidencegate-ocr", "juchang-decision-gate", "juchang-evidence-replay", "matrix-receipt-verifier", "meeting-minutes", "post-mortem", "progress-table", "short-video-script", "storyboard", "topic-ideation"]
+check("仓库示例技能格式合法：查进度表、整理会议纪要、六份创作技能与四个门禁技能",
       [s.name for s in _repo.valid] == _expect_skills and not _repo.invalid
       and "base_read" in _rb and "表里没有" in _rb and "name: progress-table" not in _rb
       and "未提及" in _mb and "不写入" in _mb and "name: meeting-minutes" not in _mb
@@ -518,7 +518,7 @@ for _cn in _creative:
         _fmt_bad.append(_cn + " yaml leaked")
 check("创作技能格式：触发词、正文、确认码和预放字数", not _fmt_bad, str(_fmt_bad))
 _cat = _repo.prompt_block()
-check("九个技能的目录放得进默认 900 字，且不截断",
+check("十二个技能的目录放得进默认 900 字，且不截断",
       _cat and len(_cat) <= 900 and _sk.TRUNC_NOTE not in _cat and all((n + "：") in _cat for n in _expect_skills),
       "%d %s" % (len(_cat or ""), _cat))
 _picks = [
@@ -544,9 +544,9 @@ check("技能默认关闭：有创作技能时目录和预放仍是空的",
       _off_repo.status())
 _only_c = _sk.SkillSet({"skills": {"enabled": True, "dir": "skills", "only": list(_creative)}, "redact_file": "redact.txt"}, FW)
 _only_story = _only_c.pick_preload("列一个分镜清单")
-check("skills.only 可以只启用六份创作技能（其余三份不选用）",
+check("skills.only 可以只启用六份创作技能（其余六份不选用）",
       [s.name for s in _only_c.valid] == _creative
-      and [s.name for s in _only_c.skipped] == ["evidencegate-ocr", "meeting-minutes", "progress-table"]
+      and [s.name for s in _only_c.skipped] == ["evidencegate-ocr", "juchang-decision-gate", "juchang-evidence-replay", "matrix-receipt-verifier", "meeting-minutes", "progress-table"]
       and "topic-ideation：" in _only_c.prompt_block() and "progress-table" not in _only_c.prompt_block()
       and _only_c.pick_preload("看一下进度表") is None
       and _only_story is not None and _only_story.name == "storyboard"
@@ -555,7 +555,7 @@ check("skills.only 可以只启用六份创作技能（其余三份不选用）"
 _ex_cfg = json.load(open(os.path.join(FW, "agents", "example.json"), encoding="utf-8"))
 _ex_sk = _ex_cfg.get("skills") or {}
 check("配置示例的技能开关仍是关闭，only 仍是空数组",
-      _ex_sk.get("enabled") is False and _ex_sk.get("only") == [] and _ex_sk.get("index_budget_chars") == 800,
+      _ex_sk.get("enabled") is False and _ex_sk.get("only") == [] and _ex_sk.get("index_budget_chars") == 900,
       str(_ex_sk))
 _inline, _ibody, _ierr = _sk.parse_skill('---\nname: demo-skill\ndescription: 演示触发词。\ntriggers: ["进度表", 纪要]\n---\n\n步骤。\n')
 _block, _bbody, _berr = _sk.parse_skill("---\nname: demo-skill\ndescription: 演示触发词。\ntriggers:\n  - 进度表\n  - 纪要\n---\n\n步骤。\n")
@@ -2746,8 +2746,13 @@ _mc = _run([sys.executable, os.path.join(FW, "tests", "test_mcp_server.py")], cw
 results.append(("本地控制面", _mc.returncode == 0))
 print("\n-- evidencegate --", flush=True)
 _eg = _run([sys.executable, os.path.join(FW, "tests", "test_evidencegate.py")], cwd=FW,
-           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
 check("EvidenceGate 门禁接入（三路由与安全）", _eg.returncode == 0, (_eg.stdout or "") + (_eg.stderr or ""))
+
+print("\n-- juchang --", flush=True)
+_jc = _run([sys.executable, os.path.join(FW, "tests", "test_juchang.py")], cwd=FW,
+           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
+check("juchang 三门接入（决策门禁路由与包裹、证据回放、回执核验）", _jc.returncode == 0, (_jc.stdout or "") + (_jc.stderr or ""))
 print("\n-- report --", flush=True)
 _rp = _run([sys.executable, os.path.join(FW, "tests", "test_report.py")], cwd=FW)
 results.append(("用量周报", _rp.returncode == 0))

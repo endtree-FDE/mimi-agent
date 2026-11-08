@@ -42,7 +42,7 @@ SCOPE_HINT = {
     "calendar_update": "calendar:calendar.event:update", "calendar_delete": "calendar:calendar.event:delete",
     "base_create": "base:record:create", "merge_forward": "im:message:readonly",
 }
-READ_TOOLS = {"history", "docs_read", "docs_search", "calendar_read", "base_read", "message_attachment", "kb_read", "kb_search", "web_search", "evidencegate_check"}
+READ_TOOLS = {"history", "docs_read", "docs_search", "calendar_read", "base_read", "message_attachment", "kb_read", "kb_search", "web_search", "evidencegate_check", "decision_gate_check", "evidence_replay_check", "receipt_verify"}
 _KB_EXT = {".md", ".txt", ".markdown"}
 WRITE_TOOLS = {"docs_create", "docs_append", "calendar_create", "calendar_create_batch", "calendar_update", "calendar_delete", "base_create"}
 _CAL_FOLLOW = {"calendar_create_batch", "calendar_update", "calendar_delete"}
@@ -81,6 +81,9 @@ TOOL_DOC = """可用工具（只读工具同一轮可以输出多行，每行一
 - base_read {"keyword":"可选"}：查询团队多维表格记录
 - kb_read {"path":"知识库内的相对路径"}：读取本机器人知识库里的 md 或 txt。不要用 ..、绝对路径或盘符
 - evidencegate_check {"path":"实例内相对路径"} 或 {"candidate":"模型输出的 JSON 文本"}：用 EvidenceGate 门禁校验文档 AI 输出，返回三路由（ACCEPT_CANDIDATE / HUMAN_REVIEW / MODEL_OUTPUT_INVALID）与字段证据。回答发票、票据、合同等图片或文件内容前先用它；路由和证据必须原样引用，不得软化（默认关；配置 tools.evidencegate_check.enabled=true 后启用）
+- decision_gate_check {"input":{"actionLevel":"L2","evidenceState":"sufficient","likelihood":"possible","impact":"medium","reversibility":"reversible","complexity":"simple"}} 或 {"path":"实例内相对路径"}：决策门禁——按证据状态×动作等级×可逆性算出路由（automatic / after_approval / manual_only / blocked）与理由。提议写入飞书前先跑它，路由和理由必须原样引用；分数只排先后、不是许可（默认关；配置 tools.decision_gate_check.enabled=true 后启用）
+- evidence_replay_check {"path":"实例内相对路径"}：证据回放核对——校验回放归档的三模式标签、哈希与缺口登记，输出 pass / fail 与逐项结果；核对通过只证明归档与登记一致，不证明业务事实（默认关；配置 tools.evidence_replay_check.enabled=true 后启用）
+- receipt_verify {"path":"实例内相对路径"}：Matrix 回执核验——离线校验 accepted@2 导出的投影哈希、发送者与任务关联、因果顺序；结果只证明内部一致，不证明来源真实（默认关；配置 tools.receipt_verify.enabled=true 后启用）
 - docs_create {"title":"标题","markdown":"正文"}：在团队专用文件夹新建文档（需发起人确认）
 - docs_append {"doc":"文档 token","markdown":"追加内容"}：在白名单文档末尾追加（需确认）
 - calendar_create {"summary":"标题","start":"ISO8601","end":"ISO8601","description":"可选","notify_all":false}：在团队日历建一个日程（需确认，不邀请任何人）
@@ -234,6 +237,97 @@ def _eg_summary(j):
     lines.append("以上为门禁结论：回答时必须引用路由与证据原文，不得软化或改写；本工具不发消息、不写业务。")
     return "\n".join(lines)
 
+
+# ---------- juchang 决策门禁 / 证据回放 / 回执核验：中文话术 ----------
+# 标签表与 skills/juchang-decision-gate/scripts/route-gate.mjs 里的上游标签一致，只做展示映射。
+_DG_LEVEL_ZH = {"L0": "只读查询", "L1": "私有草稿", "L2": "公开修改", "L3": "不可逆或批量动作"}
+_DG_EV_ZH = {"sufficient": "依据完整", "partial": "依据不完整", "conflict": "依据冲突", "missing": "缺少依据"}
+_DG_REV_ZH = {"reversible": "可以直接撤销", "compensatable": "可以补偿恢复", "irreversible": "难以恢复"}
+_DG_APPROVAL_ZH = {"none": "无需额外批准", "named": "负责人批准", "dual": "双人复核"}
+_DG_CTRL_ZH = {"evidence_resolution": "先补齐或解决冲突依据", "idempotency": "防止重复执行", "named_approval": "记录负责人批准",
+               "dual_approval": "两人分别复核", "receipt": "保留执行记录", "readback": "执行后核对结果",
+               "rollback_plan": "执行前准备回退方案", "compensation_plan": "执行前准备补偿方案",
+               "bounded_batch": "逐条或小批执行", "stop_on_failure": "任一失败立即停止"}
+# 门一（evidencegate）路由 → 门二（decision gate）证据状态。注册表见 Tools._eg_last。
+_EG_STATE = {"ACCEPT_CANDIDATE": "sufficient", "HUMAN_REVIEW": "partial", "MODEL_OUTPUT_INVALID": "missing"}
+# 写工具等级 → 其余维度的固定推导（docs/决策门禁对照与接入方案.md 3.4：可在配置里逐项覆盖）。
+_DG_LEVEL_DEFAULTS = {
+    "L1": {"reversibility": "reversible", "complexity": "simple", "likelihood": "possible", "impact": "low"},
+    "L2": {"reversibility": "reversible", "complexity": "simple", "likelihood": "possible", "impact": "medium"},
+    "L3": {"reversibility": "irreversible", "complexity": "simple", "likelihood": "possible", "impact": "high"},
+}
+_DG_FIELDS = ("reversibility", "complexity", "likelihood", "impact")
+
+
+def _dg_summary(j):
+    """把决策门禁 JSON 压成给模型看的中文摘要。路由原样引用，不给许可。"""
+    d = j.get("decision") if isinstance(j.get("decision"), dict) else {}
+    inp = j.get("input") if isinstance(j.get("input"), dict) else {}
+    mode = str(d.get("executionMode") or "")
+    head = {
+        "automatic": "门禁路由：automatic（允许进入发起人确认流；mimi 里确认不能关，仍需白名单发起人确认）",
+        "after_approval": "门禁路由：after_approval（需确认——白名单发起人用确认码 / 卡片批准后执行）",
+        "manual_only": "门禁路由：manual_only（只允许人工执行，机器人不代做）",
+        "blocked": "门禁路由：blocked（阻断——先补齐或解决依据问题）",
+    }.get(mode, "门禁路由：未知（%s）" % (mode or "无"))
+    lines = [head]
+    approval = str(d.get("approvalMode") or "")
+    if approval in _DG_APPROVAL_ZH:
+        lines.append("审批：%s" % _DG_APPROVAL_ZH[approval])
+    dims = []
+    lvl = str(inp.get("actionLevel") or "")
+    if lvl in _DG_LEVEL_ZH: dims.append("动作等级 %s %s" % (lvl, _DG_LEVEL_ZH[lvl]))
+    ev = str(inp.get("evidenceState") or "")
+    if ev in _DG_EV_ZH: dims.append("证据状态 %s" % _DG_EV_ZH[ev])
+    rev = str(inp.get("reversibility") or "")
+    if rev in _DG_REV_ZH: dims.append("可逆性 %s" % _DG_REV_ZH[rev])
+    if dims: lines.append("维度：" + "；".join(dims))
+    loss = d.get("expectedLossIndex")
+    if isinstance(loss, (int, float)):
+        lines.append("预计损失指数 %s（比较处理代价用，不是许可）；处理顺序 %s/100（只决定先后）"
+                     % (loss, (d.get("queuePriority") or {}).get("score") if isinstance(d.get("queuePriority"), dict) else "?"))
+    ctrls = [ _DG_CTRL_ZH.get(str(c), str(c)) for c in (d.get("requiredControls") or []) ]
+    if ctrls: lines.append("所需控制：" + "、".join(ctrls[:8]))
+    for r in (d.get("reasons") or [])[:3]:
+        lines.append("理由：" + str(r))
+    lines.append("以上为门禁结论：回答时必须引用路由与理由原文；分数不给权限；本工具不执行写入、不发消息。")
+    return "\n".join(lines)
+
+
+def _er_summary(j):
+    """把证据回放核对 verdict JSON 压成中文摘要。"""
+    verdict = str(j.get("verdict") or "")
+    checks = [c for c in (j.get("checks") or []) if isinstance(c, dict)]
+    failed = [c for c in checks if not c.get("ok")]
+    lines = ["证据回放核对：%s（共 %d 项检查）" % ("pass" if verdict == "pass" else "fail", len(checks))]
+    for c in failed[:10]:
+        lines.append("未过：%s——%s" % (c.get("id") or "?", str(c.get("detail") or "")[:120]))
+    if verdict == "pass":
+        lines.append("归档的三模式标签、摘要哈希与缺口登记自洽。")
+    else:
+        lines.append("任何一项失败即整体 fail；不做窄修、不猜缺失字段。")
+    lines.append("以上为核对结论：核对通过只证明归档与登记一致，不证明业务事实为真；本工具只读。")
+    return "\n".join(lines)
+
+
+def _rv_summary(j):
+    """把 Matrix 回执核验 JSON 压成中文摘要。"""
+    verdict = str(j.get("verdict") or "")
+    lines = []
+    if verdict == "passed":
+        lines.append("回执核验：passed（导出内部一致）")
+        lines.append("范围：自洽性核验；来源真实性 not_verified（caller 提供）；零写入策略：%s"
+                     % (j.get("zeroWritePolicy") or "未声明"))
+        roles = [r for r in (j.get("roles") or []) if isinstance(r, dict)]
+        if roles:
+            lines.append("角色覆盖 %d/%d：%s" % (len(roles), j.get("verifiedRoleCount") or len(roles),
+                         "、".join("%s（结论 %s）" % (r.get("role"), r.get("conclusion")) for r in roles[:4])))
+    else:
+        lines.append("回执核验：failed（原因码 %s）" % (j.get("code") or "?"))
+        lines.append("失败时 stdout 只给稳定原因码；在本地检查输入，不要把敏感房间内容抄进对话。")
+    lines.append("以上为核验结论：结果只证明内部一致性，不是来源证明、不是人工批准、不是发布许可；本工具只读、离线。")
+    return "\n".join(lines)
+
 class Tools:
     def __init__(self, cfg, base, lark_exe, log, dry=False):
         self.cfg, self.base, self.lark_exe, self.log, self.dry = cfg, base, lark_exe, log, dry
@@ -247,6 +341,7 @@ class Tools:
         self.fake = None  # 测试注入：callable(argv)->dict
         self.channel = None  # 由 agentbot 在渠道建好后挂上。没有渠道时和以前一样直接调 lark-cli
         self.skills = skills.SkillSet(cfg, base)  # 技能目录；enabled 默认 false
+        self._eg_last = {}  # 会话级门禁路由注册表：chat_id -> {status, state, ts}，供决策门禁取证据状态
 
     # ---------- 基础 ----------
     def enabled(self, name):
@@ -477,6 +572,10 @@ class Tools:
                 j = json.loads(out)
             except ValueError:
                 raise ToolError("门禁输出不是合法 JSON")
+            # 记下本会话最近一次门禁路由，供决策门禁包裹层取证据状态（带时间戳，过期回默认）。
+            state = _EG_STATE.get(str(j.get("status") or ""))
+            if state and isinstance(ctx, dict):
+                self._eg_last[str(ctx.get("chat_id") or "")] = {"status": str(j.get("status")), "state": state, "ts": time.time()}
             return _eg_summary(j)
         finally:
             if cand_file:
@@ -486,6 +585,109 @@ class Tools:
                         os.remove(cand_file)
                     except OSError:
                         pass
+
+    # ---------- juchang 三门（只读，默认关） ----------
+    def _dg_node(self):
+        spec = self.t.get("decision_gate_check") or {}
+        return str(spec.get("node") or "node")
+
+    def _run_decision_gate_cli(self, payload_file, node=None):
+        """真跑 skills/juchang-decision-gate/scripts/run-decision-gate.mjs，返回解析后的 JSON。"""
+        script = os.path.join(self.base, "skills", "juchang-decision-gate", "scripts", "run-decision-gate.mjs")
+        if not os.path.isfile(script):
+            raise ToolError("决策门禁脚本缺失（skills/juchang-decision-gate/scripts/）")
+        r = run_capture([node or self._dg_node(), script, "--input", payload_file], cwd=self.base, timeout=60)
+        out = (r.stdout or "").strip()
+        if r.returncode != 0 or not out:
+            err = (r.stderr or "").strip()
+            first = err.splitlines()[0][:160] if err else ""
+            raise ToolError(("决策门禁输入不合法：%s" % first) if first else "决策门禁脚本执行失败（exit %s）" % r.returncode)
+        try:
+            return json.loads(out)
+        except ValueError:
+            raise ToolError("决策门禁输出不是合法 JSON")
+
+    def _decision_gate_check(self, a, ctx):
+        """决策门禁查询：按证据状态×动作等级×可逆性算路由。只读：不执行、不发消息、不写业务。
+        脚本来自 skills/juchang-decision-gate/scripts/，默认关。"""
+        a = a or {}
+        payload_file = None
+        try:
+            inp = a.get("input")
+            rel = str(a.get("path") or "")
+            if isinstance(inp, dict):
+                tmpdir = os.path.join(self.base, "tmp")
+                os.makedirs(tmpdir, exist_ok=True)
+                fd, payload_file = tempfile.mkstemp(prefix="dg-in-", suffix=".json", dir=tmpdir)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(inp, ensure_ascii=False))
+            elif rel:
+                p = guard.safe_path(self.base, rel)
+                if not p or not os.path.isfile(p):
+                    raise ToolError("门禁输入文件不存在或不在实例目录内")
+                payload_file = p
+            else:
+                raise ToolError("给出决策门禁输入的 input（对象）或 path（实例内相对路径）")
+            j = self._run_decision_gate_cli(payload_file)
+            return _dg_summary(j)
+        finally:
+            if payload_file:
+                tmproot = os.path.join(self.base, "tmp")
+                if os.path.abspath(payload_file).startswith(os.path.abspath(tmproot)) and os.path.isfile(payload_file):
+                    try:
+                        os.remove(payload_file)
+                    except OSError:
+                        pass
+
+    def _evidence_replay_check(self, a, ctx):
+        """证据回放核对：校验回放归档 JSON。只读；脚本来自 skills/juchang-evidence-replay/scripts/，默认关。"""
+        spec = self.t.get("evidence_replay_check") or {}
+        node = str(spec.get("node") or "node")
+        script = os.path.join(self.base, "skills", "juchang-evidence-replay", "scripts", "check.mjs")
+        if not os.path.isfile(script):
+            raise ToolError("回放核对脚本缺失（skills/juchang-evidence-replay/scripts/）")
+        rel = str((a or {}).get("path") or "")
+        if not rel:
+            raise ToolError("给出回放 JSON 的 path（实例内相对路径）")
+        p = guard.safe_path(self.base, rel)
+        if not p or not os.path.isfile(p):
+            raise ToolError("回放文件不存在或不在实例目录内")
+        r = run_capture([node, script, p], cwd=self.base, timeout=60)
+        if r.returncode == 2:
+            raise ToolError("回放核对脚本用法错误")
+        out = (r.stdout or "").strip()
+        if not out:
+            raise ToolError("回放核对脚本执行失败（exit %s）" % r.returncode)
+        try:
+            j = json.loads(out)
+        except ValueError:
+            raise ToolError("回放核对输出不是合法 JSON")
+        return _er_summary(j)
+
+    def _receipt_verify(self, a, ctx):
+        """Matrix 回执核验：离线校验 accepted@2 导出。只读；脚本来自 skills/matrix-receipt-verifier/scripts/，默认关。"""
+        spec = self.t.get("receipt_verify") or {}
+        node = str(spec.get("node") or "node")
+        script = os.path.join(self.base, "skills", "matrix-receipt-verifier", "scripts", "verify-matrix-receipts.mjs")
+        if not os.path.isfile(script):
+            raise ToolError("回执核验脚本缺失（skills/matrix-receipt-verifier/scripts/）")
+        rel = str((a or {}).get("path") or "")
+        if not rel:
+            raise ToolError("给出导出 JSON 的 path（实例内相对路径）")
+        p = guard.safe_path(self.base, rel)
+        if not p or not os.path.isfile(p):
+            raise ToolError("回执导出文件不存在或不在实例目录内")
+        r = run_capture([node, script, "--input", p], cwd=self.base, timeout=60)
+        out = (r.stdout or "").strip()
+        if r.returncode == 2:
+            raise ToolError("回执核验输入文件读不了或不是合法 JSON")
+        if not out:
+            raise ToolError("回执核验脚本执行失败（exit %s）" % r.returncode)
+        try:
+            j = json.loads(out)
+        except ValueError:
+            raise ToolError("回执核验输出不是合法 JSON")
+        return _rv_summary(j)
 
     def _history(self, a, ctx):
         if ctx.get("chat_type") != "group": raise ToolError("私聊里不提供群历史查询")
@@ -677,6 +879,81 @@ class Tools:
         return "表格记录：\n" + clip_chars(json.dumps(j.get("data"), ensure_ascii=False), cap)
 
     # ---------- 写：先登记待确认，确认后执行 ----------
+    def _dg_evidence(self, ctx, dg):
+        """决策门禁的证据状态：优先取本会话近期 evidencegate_check 的路由（带时间与来源），
+        没有或过期用配置默认。来源永远可复核，不猜。"""
+        window = _cfg_int(dg.get("evidence_window_sec"), 900)
+        default = str(dg.get("evidence_default") or "sufficient")
+        if default not in _EG_STATE.values():
+            default = "sufficient"
+        rec = (self._eg_last or {}).get(str((ctx or {}).get("chat_id") or ""))
+        if isinstance(rec, dict) and (window <= 0 or time.time() - float(rec.get("ts") or 0) <= window):
+            return str(rec.get("state") or default), "evidencegate:%s" % rec.get("status")
+        return default, "default"
+
+    def _decision_gate_guard(self, name, ctx):
+        """写提案进门禁（write.decision_gate）：算路由并给出审计字段。
+        blocked / manual_only 拒绝提案（fail closed）；其余放行进既有确认流。
+        未声明等级的写工具不过门禁（现状不变）；只读工具一律不过门禁。"""
+        dg = self.w.get("decision_gate")
+        if not isinstance(dg, dict) or not dg.get("enabled"):
+            return None
+        tools_map = dg.get("tools")
+        if not isinstance(tools_map, dict):
+            tools_map = {}
+        spec = tools_map.get(name)
+        if spec is None:
+            return None
+        if isinstance(spec, str):
+            level, over = spec, {}
+        elif isinstance(spec, dict):
+            level, over = str(spec.get("level") or ""), spec
+        else:
+            level, over = "", {}
+        if level not in _DG_LEVEL_DEFAULTS:
+            # 配置写错等级：fail closed，宁可挡住也不猜。
+            self.audit(kind="write_blocked", tool=name, user=ctx["user"], chat=ctx["chat_id"],
+                       args=_brief({"level": level}), gate={"level": level, "evidence": "", "evidence_source": "config",
+                       "execution": "blocked", "approval": "", "detail": "bad_level"})
+            raise ToolError("决策门禁配置的 %s 等级不合法（只能是 L1 / L2 / L3；不想过门就把它从 write.decision_gate.tools 里删掉）" % name)
+        ev_state, ev_source = self._dg_evidence(ctx, dg)
+        payload = {"actionLevel": level, "evidenceState": ev_state}
+        payload.update(_DG_LEVEL_DEFAULTS[level])
+        for k in _DG_FIELDS:
+            if over.get(k) and str(over.get(k)):
+                payload[k] = str(over.get(k))
+        tmpdir = os.path.join(self.base, "tmp")
+        os.makedirs(tmpdir, exist_ok=True)
+        fd, payload_file = tempfile.mkstemp(prefix="dg-prop-", suffix=".json", dir=tmpdir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False))
+            node = str(dg.get("node") or self._dg_node())
+            j = self._run_decision_gate_cli(payload_file, node=node)
+        finally:
+            try:
+                os.remove(payload_file)
+            except OSError:
+                pass
+        d = j.get("decision") if isinstance(j.get("decision"), dict) else {}
+        mode = str(d.get("executionMode") or "")
+        approval = str(d.get("approvalMode") or "")
+        reasons = [str(r) for r in (d.get("reasons") or [])]
+        q = d.get("queuePriority") if isinstance(d.get("queuePriority"), dict) else {}
+        gate = {"level": level, "evidence": ev_state, "evidence_source": ev_source,
+                "execution": mode, "approval": approval, "priority": q.get("score")}
+        if mode == "blocked":
+            self.audit(kind="write_blocked", tool=name, user=ctx["user"], chat=ctx["chat_id"], gate=gate,
+                       detail="；".join(reasons[:3]))
+            reason = reasons[0] if reasons else "依据状态不允许执行"
+            raise ToolError("决策门禁阻断：%s（证据来源：%s。先补齐或解决依据，再重新发起。）" % (reason, ev_source))
+        if mode == "manual_only":
+            gate["detail"] = "manual_only"
+            self.audit(kind="write_blocked", tool=name, user=ctx["user"], chat=ctx["chat_id"], gate=gate,
+                       detail="只允许人工执行")
+            raise ToolError("按决策门禁，这个动作（等级 %s）只允许人工执行：请管理员在飞书里自行操作，机器人不代做。" % level)
+        return gate
+
     def propose_write(self, name, args, ctx):
         if name not in WRITE_TOOLS: raise ToolError("未知工具")
         if not self.w.get("enabled"): raise ToolError("写入功能还没启用")
@@ -686,10 +963,11 @@ class Tools:
         if ctx["user"] not in (self.w.get("allowed_users") or {}):
             self.audit(kind="write_denied", tool=name, user=ctx["user"], chat=ctx["chat_id"], args=_brief(args))
             raise ToolError("你不在写入白名单里，这个操作只能由管理员发起")
+        gate = self._decision_gate_guard(name, ctx)
         raw = args or {}
         argv, summary, steps = self._build_write(name, raw)
         notify = _want_notify(name, raw, ctx.get("question") or "")
-        return self._propose_record(name, summary, steps, argv, ctx, notify, memory_text="")
+        return self._propose_record(name, summary, steps, argv, ctx, notify, memory_text="", gate=gate)
 
     def propose_memory(self, args, ctx):
         """模型提议记一条。落盘仍要白名单发起人用确认码点头。"""
@@ -703,10 +981,11 @@ class Tools:
         limit = _cfg_int((self.cfg.get("memory") or {}).get("max_fact_chars"), 300)
         if len(text) < 2: raise ToolError("要记的内容太短")
         if limit > 0 and len(text) > limit: raise ToolError("太长了，请控制在 %d 字以内" % limit)
+        gate = self._decision_gate_guard("memory_propose", ctx)
         summary = "写入群记忆：%s" % text[:80]
-        return self._propose_record("memory_propose", summary, [], [], ctx, False, memory_text=text)
+        return self._propose_record("memory_propose", summary, [], [], ctx, False, memory_text=text, gate=gate)
 
-    def _propose_record(self, name, summary, steps, argv, ctx, notify, memory_text=""):
+    def _propose_record(self, name, summary, steps, argv, ctx, notify, memory_text="", gate=None):
         plan = confirm_mode.plan(self.cfg, self.base, confirm_mode.is_high_risk(name))
         scope = str(ctx.get("scope") or "")
         ah = confirm_mode.action_hash(name, steps, ctx["user"], ctx["chat_id"], scope, memory_text[:80] if memory_text else "")
@@ -720,16 +999,23 @@ class Tools:
         if memory_text:
             rec["memory_text"] = memory_text
         code = self._reserve(rec)
-        self.audit(kind="write_proposed", tool=name, user=ctx["user"], chat=ctx["chat_id"], code=code,
-                   token=plan["token"], summary=summary, scope=ctx.get("chat_type"))
+        audit_kw = dict(kind="write_proposed", tool=name, user=ctx["user"], chat=ctx["chat_id"], code=code,
+                        token=plan["token"], summary=summary, scope=ctx.get("chat_type"))
+        if gate:
+            audit_kw["gate"] = gate  # 路由依据：等级、证据状态与来源、路由、审批模式、优先级
+        self.audit(**audit_kw)
         if plan["fallback"]:
             self.log.warning("confirm cards unavailable, using code")
         if plan["mode"] == "code":
             self._arm_card(None)
             minutes = int(plan["ttl"]) // 60
             if memory_text:
-                return "将要记入本群记忆：%s\n请发起人在 %d 分钟内 @我 回复「确认 %s」执行，或「取消 %s」。没确认之前，不要把它当成已经记住。" % (memory_text[:200], minutes, code, code)
-            return "将要执行：%s\n请发起人在 %d 分钟内 @我 回复「确认 %s」执行，或「取消 %s」。" % (summary, minutes, code, code)
+                out = "将要记入本群记忆：%s\n请发起人在 %d 分钟内 @我 回复「确认 %s」执行，或「取消 %s」。没确认之前，不要把它当成已经记住。" % (memory_text[:200], minutes, code, code)
+            else:
+                out = "将要执行：%s\n请发起人在 %d 分钟内 @我 回复「确认 %s」执行，或「取消 %s」。" % (summary, minutes, code, code)
+            if gate and gate.get("approval") == "dual":
+                out += "\n决策门禁：这个动作按门禁需双人复核；机器人只执行单人确认流，另一位管理员请直接跟帖复核。"
+            return out
         shown = summary if not memory_text else ("记入本群记忆：" + memory_text[:200])
         text = confirm_mode.button_text(guard.redact(shown, self.names), rec["impact"], plan["mode"], code, plan["ttl"])
         text = guard.redact(text, self.names)
@@ -737,6 +1023,8 @@ class Tools:
             text += "\n没确认之前，不要把它当成已经记住。"
         elif memory_text:
             text += "\n没点确认之前，不要把它当成已经记住。"
+        if gate and gate.get("approval") == "dual":
+            text += "\n决策门禁：这个动作按门禁需双人复核；机器人只执行单人确认流，另一位管理员请直接跟帖复核。"
         card = confirm_mode.build_card(text, plan["token"], ah)
         self._arm_card({"card": card, "token": plan["token"]})
         return text

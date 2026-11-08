@@ -159,7 +159,7 @@
     "enabled": false,
     "dir": "skills",
     "only": [],
-    "index_budget_chars": 800,
+    "index_budget_chars": 900,
     "preload": true,
     "preload_budget_chars": 3000,
     "evolve": {
@@ -257,6 +257,15 @@
       "enabled": false,
       "schema": "skills/evidencegate-ocr/scripts/evidence-schema.json"
     },
+    "decision_gate_check": {
+      "enabled": false
+    },
+    "evidence_replay_check": {
+      "enabled": false
+    },
+    "receipt_verify": {
+      "enabled": false
+    },
     "docs_create": {
       "enabled": true
     },
@@ -283,6 +292,17 @@
     "enabled": true,
     "confirm_ttl_sec": 300,
     "max_batch": 10,
+    "decision_gate": {
+      "enabled": false,
+      "tools": {
+        "docs_create": "L2",
+        "docs_append": "L2",
+        "calendar_create": "L2",
+        "base_create": "L2"
+      },
+      "evidence_window_sec": 900,
+      "evidence_default": "sufficient"
+    },
     "allowed_users": {
       "REPLACE_USER_OPEN_ID": "小李"
     },
