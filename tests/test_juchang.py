@@ -232,6 +232,15 @@ def test_receipt_verify():
             check("回执导出路径逃逸被拒绝", False)
         except ToolError as e:
             check("回执导出路径逃逸被拒绝", "不存在或不在实例目录内" in str(e), e)
+        # 入口判定回归：从含 ~ 与非 ASCII 的路径（CI runner 的 8.3 短路径形状）跑也要出结果
+        odd = os.path.join(base, "RUNNE~1-核验")
+        os.makedirs(odd, exist_ok=True)
+        script_odd = os.path.join(odd, "verify-matrix-receipts.mjs")
+        shutil.copy(os.path.join(FW, "skills", "matrix-receipt-verifier", "scripts", "verify-matrix-receipts.mjs"), script_odd)
+        r = subprocess.run(["node", script_odd, "--input", os.path.join(base, "receipt-ok.json")],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        check("含 ~ 的路径下入口判定仍执行（8.3 短路径回归）",
+              r.returncode == 0 and '"passed"' in (r.stdout or ""), (r.stdout or "") + (r.stderr or ""))
     finally:
         shutil.rmtree(base, ignore_errors=True)
 

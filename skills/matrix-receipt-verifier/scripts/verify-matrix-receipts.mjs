@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 const WORKER_PREFIX = "JUCHANG_AGENT_STUDIO_WORKER_RUN: ";
 const ACCEPTED_PREFIX = "JUCHANG_AGENT_STUDIO_RECEIPT_ACCEPTED: ";
@@ -423,8 +424,12 @@ export function runCli(argv) {
   return 0;
 }
 
-const invokedPath = process.argv[1]?.replaceAll("\\", "/").replace(/^([A-Za-z]):/, "/$1:");
-if (invokedPath && new URL(import.meta.url).pathname === invokedPath) {
+// 入口判定：mimi 环境适配修复（上游原为 argv[1] 反斜杠转斜杠后手拼 /盘符:/ 路径，
+// 再与 new URL(import.meta.url).pathname 比较；含 ~（如 Windows 8.3 短路径 RUNNER~1）
+// 或非 ASCII 的路径会被 URL 百分号编码，手拼路径不编码，永不相等，入口不执行、exit 0 无输出）。
+// 改为标准的 pathToFileURL(process.argv[1]).href === import.meta.url，核验逻辑零改动。
+const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
+if (invokedPath && invokedPath === import.meta.url) {
   try {
     process.exitCode = runCli(process.argv.slice(2));
   } catch (error) {
