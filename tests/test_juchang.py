@@ -395,6 +395,129 @@ def test_statics():
     check("示例里写提案门禁默认关且带等级声明", dg.get("enabled") is False and dg.get("tools", {}).get("docs_create") == "L2", dg)
 
 
+# ---------- ⑧ 零写入冻结导出器 + 端到端复检（生产配置） ----------
+
+def make_ledger_base():
+    """造一个账本 base：群记忆 meta.json + 审计 jsonl（含 write_blocked）。"""
+    base = tempfile.mkdtemp(prefix="jc_ledger_")
+    gd = os.path.join(base, "memory", "groups", "oc_demo")
+    os.makedirs(gd, exist_ok=True)
+    os.makedirs(os.path.join(base, "audit"), exist_ok=True)
+    json.dump({"facts": [{"text": "demo 事实"}]}, open(os.path.join(gd, "meta.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    today = datetime.date.today().isoformat()
+    lines = [
+        json.dumps({"kind": "read", "tool": "evidencegate_check", "user": "ou_x", "chat": "oc_demo", "ok": True,
+                    "args": "{}", "ts": "%sT10:00:00" % today}, ensure_ascii=False),
+        json.dumps({"kind": "write_blocked", "tool": "docs_create", "user": "ou_x", "chat": "oc_demo", "ok": False,
+                    "gate": {"level": "L2", "evidence": "partial", "evidence_source": "evidencegate:HUMAN_REVIEW", "execution": "blocked"},
+                    "detail": "阻断", "ts": "%sT10:01:00" % today}, ensure_ascii=False),
+    ]
+    with open(os.path.join(base, "audit", "202611.jsonl"), "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return base
+
+
+def run_freeze(base, since=None):
+    cmd = ["node", os.path.join("skills", "juchang-evidence-replay", "scripts", "freeze-audit.mjs"), "--base", base]
+    if since:
+        cmd += ["--since", since]
+    r = subprocess.run(cmd, cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    return r
+
+
+def test_freeze_chain():
+    base = make_ledger_base()
+    try:
+        today = datetime.date.today().isoformat()
+        r = run_freeze(base, today)
+        check("冻结导出器输出合法 JSON（exit 0）", r.returncode == 0, r.stdout + r.stderr)
+        j = json.loads(r.stdout)
+        check("冻结档案带可重算哈希链（sourceText→rawExportSha256）",
+              hashlib.sha256(j["freeze"]["sourceText"].encode("utf-8")).hexdigest() == j["rawExportSha256"], r.stdout[:400])
+        check("冻结档案三模式标签正确", j.get("readonly") is True and "mimi-audit-replay@1" in j.get("schema", ""), r.stdout[:200])
+        check("缺口如实登记：窗口有 write_blocked → needs_revision",
+              j.get("qualityReview", {}).get("state") == "needs_revision", r.stdout[:300])
+        check("未触发的门 not_called 原值保留",
+              any(x.get("skill") == "receipt_verify" and x.get("status") == "not_called" for x in j.get("skillInvocations", [])), r.stdout[:300])
+        # 冻结→核对器闭环
+        rp = os.path.join(base, "replay.json")
+        with open(rp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(r.stdout)
+        rr = subprocess.run(["node", os.path.join("skills", "juchang-evidence-replay", "scripts", "check.mjs"), rp],
+                            cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        check("冻结档案过核对器 pass", rr.returncode == 0 and '"pass"' in (rr.stdout or ""), rr.stdout + rr.stderr)
+        # 篡改哈希链任一段 → 可核验性失效（sourceText 与 raw 不再匹配）
+        tampered = json.loads(r.stdout)
+        tampered["freeze"]["sourceText"] = tampered["freeze"]["sourceText"] + "\n"
+        check("篡改 sourceText 后重算≠存证（可核验性反面成立）",
+              hashlib.sha256(tampered["freeze"]["sourceText"].encode("utf-8")).hexdigest() != tampered["rawExportSha256"])
+        # 零写入：freeze 前后账本文件集合不变
+        before = set(os.path.relpath(os.path.join(root, f), base) for root, _, files in os.walk(base) for f in files)
+        run_freeze(base, today)
+        after = set(os.path.relpath(os.path.join(root, f), base) for root, _, files in os.walk(base) for f in files)
+        check("冻结导出器零写入（不产生/改动任何账本文件）", after == before, (before ^ after))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def _prod_config():
+    """生产等价的配置蓝本：决策门禁 L2 试运行（docs_create / base_create）、两个门工具已启用。
+    agents/mimi.json 是本机 gitignored 实例配置、不在 CI checkout 里，所以：
+    本地有真配置时用它（并核对形状），CI 无真文件时用这份内联蓝本，e2e 永远不依赖那个文件。"""
+    cfg = {"profile": "placeholder", "bot_open_id": "ou_placeholder", "bot_names": ["小助手"],
+           "tools": {"evidencegate_check": {"enabled": True}, "decision_gate_check": {"enabled": True},
+                     "docs_create": {"enabled": True}},
+           "write": {"enabled": True, "confirm_ttl_sec": 300,
+                     "allowed_users": {"user_jc": "测试"},
+                     "resources": {"folder_token": "fld_demo"},
+                     "decision_gate": {"enabled": True, "tools": {"docs_create": "L2", "base_create": "L2"},
+                                       "evidence_window_sec": 900, "evidence_default": "sufficient"}}}
+    real = os.path.join(FW, "agents", "mimi.json")
+    if os.path.isfile(real):
+        prod = json.load(open(real, encoding="utf-8-sig"))
+        pdg = (prod.get("write") or {}).get("decision_gate") or {}
+        check("本机生产 mimi.json 的决策门禁配置与文档一致",
+              pdg.get("enabled") is True
+              and str((pdg.get("tools") or {}).get("docs_create")) in ("L2", "{'level': 'L2'}"),
+              "decision_gate=" + str(pdg.get("enabled")))
+        check("本机生产 mimi.json 已启用两个门工具",
+              (prod.get("tools") or {}).get("evidencegate_check", {}).get("enabled") is True
+              and (prod.get("tools") or {}).get("decision_gate_check", {}).get("enabled") is True,
+              "decision_gate_check=" + str((prod.get("tools") or {}).get("decision_gate_check")))
+    return cfg
+
+
+def test_e2e_production_gate():
+    """生产配置形态下端到端验证双门+审计+冻结+核验闭环（可核验、可复现，不依赖本机实例文件）。"""
+    cfg = _prod_config()
+    base = tempfile.mkdtemp(prefix="jc_e2e_")
+    shutil.copytree(os.path.join(FW, "skills"), os.path.join(base, "skills"))
+    try:
+        t = Tools(cfg, base, lambda: ["lark-cli"], logging.getLogger("e2e"), dry=True)
+        t.run_read("evidencegate_check", {"candidate": BAD_DOC}, dict(CTX))
+        check("门禁一 HUMAN_REVIEW 已登记进会话注册表", t._eg_last.get("oc_jc", {}).get("state") == "partial", t._eg_last)
+        try:
+            t.propose_write("docs_create", {"title": "报销", "markdown": "内容"}, dict(CTX))
+            check("partial 证据阻断写提案", False)
+        except ToolError as e:
+            check("partial 证据阻断写提案", "决策门禁阻断" in str(e), e)
+        blocked = [e for e in audit_events(base) if e.get("kind") == "write_blocked"]
+        check("阻断审计落盘且带 gate 依据",
+              blocked and blocked[0].get("gate", {}).get("evidence") == "partial"
+              and "evidencegate:HUMAN_REVIEW" in str(blocked[0].get("gate", {}).get("evidence_source")), blocked)
+        # 冻结真实审计链 → 核对器
+        r = run_freeze(base, datetime.date.today().isoformat())
+        check("冻结导出器输出合法 JSON", r.returncode == 0, r.stdout + r.stderr)
+        rp = os.path.join(base, "replay.json")
+        with open(rp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(r.stdout)
+        rr = subprocess.run(["node", os.path.join("skills", "juchang-evidence-replay", "scripts", "check.mjs"), rp],
+                            cwd=FW, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        check("生产审计链冻结后经核对器 pass", rr.returncode == 0 and '"pass"' in (rr.stdout or ""), rr.stdout + rr.stderr)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 test_upstream_port()
 test_default_off()
 test_decision_gate_routes()
@@ -402,6 +525,8 @@ test_evidence_replay()
 test_receipt_verify()
 test_gate_wrapper()
 test_statics()
+test_freeze_chain()
+test_e2e_production_gate()
 
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)
