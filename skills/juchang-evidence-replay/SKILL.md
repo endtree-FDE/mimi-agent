@@ -14,22 +14,30 @@ description: 证据回放核对：校验回放归档的三模式标签、哈希�
 
 ## 用法（mimi 内）
 
-用 `evidence_replay_check` 只读工具（默认关，配置 `tools.evidence_replay_check.enabled=true` 后启用），参数给回放 JSON 的实例内相对路径；或直接跑脚本：
+### 冻结（推荐）
 
 ```bash
-node skills/juchang-evidence-replay/scripts/check.mjs <回放JSON路径> [证据目录]
+node skills/juchang-evidence-replay/scripts/freeze-audit.mjs --base <实例目录> [--since YYYY-MM-DD] [--label "说明"] > 档案.json
 ```
 
-核对器逐项检查：三模式标签存在且一致、摘要哈希可重算、回放 schema 合法（协议模拟报告不得冒充归档）、缺口登记存在。输出 verdict JSON（pass / fail + 逐项 checks）；任何一项失败即整体 fail，不做窄修、不猜缺失字段。
+把群记忆（`memory/groups/**/meta.json`）与审计链（`audit/*.jsonl`）冻结成只读回放档案：逐文件 sha256 → 排序拼接 → 汇总哈希 `rawExportSha256`；`freeze.sourceText` 留在档案里，任何人可重算比对。**零写入**：脚本只读，不写文件、不发消息，档案经 stdout 重定向保存。PowerShell 5.1 的 `>` 会写 UTF-16，建议用 bash 重定向或 `[IO.File]::WriteAllText`。
+
+### 核对
+
+```bash
+node skills/juchang-evidence-replay/scripts/check.mjs 档案.json [证据目录]
+```
+
+或用 `evidence_replay_check` 只读工具（默认关，配置 `tools.evidence_replay_check.enabled=true` 后启用），参数给回放 JSON 的实例内相对路径。核对器逐项检查：三模式标签存在且一致、摘要哈希可重算、回放 schema 合法（协议模拟报告不得冒充归档）、缺口登记存在。输出 verdict JSON（pass / fail + 逐项 checks）；任何一项失败即整体 fail，不做窄修、不猜缺失字段。
 
 ## mimi 映射（v1 边界，如实登记）
 
-- 权威账本 = 群记忆 GROUP.md + audit/*.jsonl（三模式的「实跑记录」与审计留痕都在这里）。
-- 冻结 = 主人把账本片段导出成回放 JSON（带 rawExportSha256 等哈希）后用本核对器校验。
-- 自动导出器还没做：v1 只提供核对，不提供写路径（零写入红线——本 skill 不写任何文件）。
+- 权威账本 = 群记忆 `groups/**/meta.json` + 审计链 `audit/*.jsonl`。
+- 冻结 = 用 `freeze-audit.mjs` 把账本片段导出成可重算哈希的只读档案，用 `check.mjs` 或 `evidence_replay_check` 核对。
+- 冻结导出器是 stdout 零写入的（脚本只读、不写文件、不发消息），守住零写入红线。
 
 ## 边界
 
 - 只读：不写任何文件、不发任何消息、不修改被检查的证据。
-- 核对通过只证明「归档与登记一致」，不证明业务事实为真。
+- 核对通过只证明「归档与账本一致」，不证明业务事实为真。
 - 本地预验证与正式运行分开记账；模拟内容常驻标注。
