@@ -460,14 +460,36 @@ def test_freeze_chain():
         shutil.rmtree(base, ignore_errors=True)
 
 
+def _prod_config():
+    """生产等价的配置蓝本：决策门禁 L2 试运行（docs_create / base_create）、两个门工具已启用。
+    agents/mimi.json 是本机 gitignored 实例配置、不在 CI checkout 里，所以：
+    本地有真配置时用它（并核对形状），CI 无真文件时用这份内联蓝本，e2e 永远不依赖那个文件。"""
+    cfg = {"profile": "placeholder", "bot_open_id": "ou_placeholder", "bot_names": ["小助手"],
+           "tools": {"evidencegate_check": {"enabled": True}, "decision_gate_check": {"enabled": True},
+                     "docs_create": {"enabled": True}},
+           "write": {"enabled": True, "confirm_ttl_sec": 300,
+                     "allowed_users": {"user_jc": "测试"},
+                     "resources": {"folder_token": "fld_demo"},
+                     "decision_gate": {"enabled": True, "tools": {"docs_create": "L2", "base_create": "L2"},
+                                       "evidence_window_sec": 900, "evidence_default": "sufficient"}}}
+    real = os.path.join(FW, "agents", "mimi.json")
+    if os.path.isfile(real):
+        prod = json.load(open(real, encoding="utf-8-sig"))
+        pdg = (prod.get("write") or {}).get("decision_gate") or {}
+        check("本机生产 mimi.json 的决策门禁配置与文档一致",
+              pdg.get("enabled") is True
+              and str((pdg.get("tools") or {}).get("docs_create")) in ("L2", "{'level': 'L2'}"),
+              "decision_gate=" + str(pdg.get("enabled")))
+        check("本机生产 mimi.json 已启用两个门工具",
+              (prod.get("tools") or {}).get("evidencegate_check", {}).get("enabled") is True
+              and (prod.get("tools") or {}).get("decision_gate_check", {}).get("enabled") is True,
+              "decision_gate_check=" + str((prod.get("tools") or {}).get("decision_gate_check")))
+    return cfg
+
+
 def test_e2e_production_gate():
-    """用生产实例配置（mimi.json 的 tools/write 段）在临时目录端到端验证双门+审计+冻结+核验闭环。"""
-    cfg = json.load(open(os.path.join(FW, "agents", "mimi.json"), encoding="utf-8-sig"))
-    check("生产配置已启用决策门禁（write.decision_gate）", (cfg.get("write") or {}).get("decision_gate", {}).get("enabled") is True)
-    check("生产配置已启用 evidencegate_check 与 decision_gate_check",
-          (cfg.get("tools") or {}).get("evidencegate_check", {}).get("enabled") is True
-          and (cfg.get("tools") or {}).get("decision_gate_check", {}).get("enabled") is True, cfg.get("tools"))
-    cfg["write"]["allowed_users"] = {"user_jc": "测试"}  # 白名单由测试注入，不改生产文件
+    """生产配置形态下端到端验证双门+审计+冻结+核验闭环（可核验、可复现，不依赖本机实例文件）。"""
+    cfg = _prod_config()
     base = tempfile.mkdtemp(prefix="jc_e2e_")
     shutil.copytree(os.path.join(FW, "skills"), os.path.join(base, "skills"))
     try:
@@ -476,15 +498,16 @@ def test_e2e_production_gate():
         check("门禁一 HUMAN_REVIEW 已登记进会话注册表", t._eg_last.get("oc_jc", {}).get("state") == "partial", t._eg_last)
         try:
             t.propose_write("docs_create", {"title": "报销", "markdown": "内容"}, dict(CTX))
-            check("生产配置下 partial 证据阻断写提案", False)
+            check("partial 证据阻断写提案", False)
         except ToolError as e:
-            check("生产配置下 partial 证据阻断写提案", "决策门禁阻断" in str(e), e)
+            check("partial 证据阻断写提案", "决策门禁阻断" in str(e), e)
         blocked = [e for e in audit_events(base) if e.get("kind") == "write_blocked"]
-        check("生产配置下阻断审计落盘且带 gate 依据",
+        check("阻断审计落盘且带 gate 依据",
               blocked and blocked[0].get("gate", {}).get("evidence") == "partial"
               and "evidencegate:HUMAN_REVIEW" in str(blocked[0].get("gate", {}).get("evidence_source")), blocked)
         # 冻结真实审计链 → 核对器
         r = run_freeze(base, datetime.date.today().isoformat())
+        check("冻结导出器输出合法 JSON", r.returncode == 0, r.stdout + r.stderr)
         rp = os.path.join(base, "replay.json")
         with open(rp, "w", encoding="utf-8", newline="\n") as f:
             f.write(r.stdout)
