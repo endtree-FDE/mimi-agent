@@ -2753,6 +2753,11 @@ print("\n-- juchang --", flush=True)
 _jc = _run([sys.executable, os.path.join(FW, "tests", "test_juchang.py")], cwd=FW,
            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
 check("juchang 三门接入（决策门禁路由与包裹、证据回放、回执核验）", _jc.returncode == 0, (_jc.stdout or "") + (_jc.stderr or ""))
+
+print("\n-- lint selftest --", flush=True)
+_ls = _run([sys.executable, os.path.join(FW, "checks", "lint.py"), "--selftest"], cwd=FW,
+           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+check("lint 规则自检（坏样例命中、好样例不误报）", _ls.returncode == 0, (_ls.stdout or "") + (_ls.stderr or ""))
 print("\n-- report --", flush=True)
 _rp = _run([sys.executable, os.path.join(FW, "tests", "test_report.py")], cwd=FW)
 results.append(("用量周报", _rp.returncode == 0))
