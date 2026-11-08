@@ -1,0 +1,37 @@
+{
+  "schema_version": "0.2.0",
+  "schema_id": "hotel-expense-v2",
+  "description": "Synthetic hotel-expense OCR candidate contract with uncertainty, date, amount, evidence-locator and safety gates.",
+  "prompt": "只转写图片中明确可见的内容，不推断。只输出一个 JSON 对象，不要 Markdown。字段：document_title,test_number,issue_date,buyer,seller,city,expense_type,check_in_date,check_out_date,quantity_nights,amount_excluding_tax_yuan,tax_rate,tax_amount_yuan,total_amount_yuan,purpose_text,synthetic_labels,uncertainties。金额和数量输出数字；tax_rate 输出图片中的原文字符串；synthetic_labels 输出图片中实际可见的合成、测试或非真实提示原文数组；uncertainties 输出不确定字段名数组，没有则输出空数组；缺失字段输出 null。",
+  "additional_fields": "reject",
+  "fields": {
+    "document_title": { "type": "string", "required": true },
+    "test_number": { "type": "string", "required": true },
+    "issue_date": { "type": "string", "required": true, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "buyer": { "type": "string", "required": true },
+    "seller": { "type": "string", "required": true },
+    "city": { "type": "string", "required": true },
+    "expense_type": { "type": "string", "required": true },
+    "check_in_date": { "type": "string", "required": true, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "check_out_date": { "type": "string", "required": true, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "quantity_nights": { "type": "integer", "required": true, "minimum": 1 },
+    "amount_excluding_tax_yuan": { "type": "number", "required": true, "minimum": 0 },
+    "tax_rate": { "type": "string", "required": true, "pattern": "^\\d+(?:\\.\\d+)?%$" },
+    "tax_amount_yuan": { "type": "number", "required": true, "minimum": 0 },
+    "total_amount_yuan": { "type": "number", "required": true, "minimum": 0 },
+    "purpose_text": { "type": "string", "required": true },
+    "synthetic_labels": { "type": "array", "items": "string", "required": true },
+    "uncertainties": { "type": "array", "items": "string", "required": true }
+  },
+  "rules": [
+    { "id": "stay-date-order", "kind": "date_order", "before": "check_in_date", "after": "check_out_date" },
+    { "id": "stay-night-count", "kind": "date_difference_equals", "before": "check_in_date", "after": "check_out_date", "target": "quantity_nights" },
+    { "id": "amount-arithmetic", "kind": "sum_equals", "fields": ["amount_excluding_tax_yuan", "tax_amount_yuan"], "target": "total_amount_yuan", "tolerance": 0.01 },
+    { "id": "tax-arithmetic", "kind": "percent_applied", "base": "amount_excluding_tax_yuan", "rate": "tax_rate", "target": "tax_amount_yuan", "tolerance": 0.01 },
+    { "id": "synthetic-safety-labels", "kind": "array_contains_all", "field": "synthetic_labels", "values": ["合成测试票据", "仅供OCR评测", "非真实发票"] },
+    { "id": "synthetic-labels-unique", "kind": "array_unique", "field": "synthetic_labels" },
+    { "id": "uncertainties-must-route", "kind": "array_empty", "field": "uncertainties" },
+    { "id": "buyer-seller-distinct", "kind": "fields_not_equal", "left": "buyer", "right": "seller" }
+  ],
+  "safety": { "human_required": true, "erp_write_allowed": false }
+}

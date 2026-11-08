@@ -253,6 +253,10 @@
       "enabled": true,
       "max_chars": 8000
     },
+    "evidencegate_check": {
+      "enabled": false,
+      "schema": "skills/evidencegate-ocr/scripts/evidence-schema.json"
+    },
     "docs_create": {
       "enabled": true
     },

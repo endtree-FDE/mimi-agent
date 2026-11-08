@@ -792,6 +792,24 @@
             }
           }
         },
+        "evidencegate_check": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "EvidenceGate 门禁：校验文档 AI 输出并返回三路由与字段证据。默认关。",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "schema": {
+              "type": "string",
+              "description": "门禁契约 JSON 的实例内相对路径。不写用 skills/evidencegate-ocr/scripts/evidence-schema.json。"
+            },
+            "node": {
+              "type": "string",
+              "description": "Node 可执行文件名或路径。不写用 node。"
+            }
+          }
+        },
         "message_attachment": {
           "type": "object",
           "additionalProperties": true,
