@@ -61,6 +61,10 @@ python checks/check_config.py agents/example.json
 # 回答质量回归（假模型，不连飞书，不拿单实例锁）
 python evals/run.py --config agents/example.json --provider fake --tag ci --baseline evals/baseline/ci.json --out evals/out
 
+# 成熟度金标：日常只做自检。整套假模型回归不进 --tag ci，要本地另跑
+python checks/golden_wave3.py
+python evals/run.py --config agents/example.json --provider fake --suite evals/cases/golden_wave3.json --tag golden --out evals/out
+
 # 只读诊断（不发消息；没装 lark-cli 会列出缺什么）
 python agentbot.py agents/example.json --doctor
 

@@ -2759,6 +2759,11 @@ _ls = _run([sys.executable, os.path.join(FW, "checks", "lint.py"), "--selftest"]
            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 check("lint 规则自检（坏样例命中、好样例不误报）", _ls.returncode == 0, (_ls.stdout or "") + (_ls.stderr or ""))
 
+print("\n-- golden wave3 self-check --", flush=True)
+_gw = _run([sys.executable, os.path.join(FW, "checks", "golden_wave3.py")], cwd=FW,
+           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+check("成熟度金标自检（不启动机器人，不调模型）", _gw.returncode == 0, (_gw.stdout or "") + (_gw.stderr or ""))
+
 print("\n-- gates status --", flush=True)
 _gs = _run([sys.executable, os.path.join(FW, "tests", "test_gates_status.py")], cwd=FW,
            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)

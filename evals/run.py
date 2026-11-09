@@ -2,7 +2,7 @@
 # 回答质量回归。用内存渠道把用例送进真正的回答流程。
 # 不连接飞书，不发消息，也不拿机器人的单实例锁。
 # 用法见 docs/回归测试.md。
-import argparse, json, os, shutil, subprocess, sys, time
+import argparse, json, os, re, shutil, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -218,6 +218,17 @@ def write_redact(path, names):
         f.write("\n".join(lines) + ("\n" if lines else ""))
 
 
+_OBS_MID = re.compile(r"^om_obsfixture[A-Za-z0-9]{1,40}$")
+
+
+def turn_message_id(turn, case_id, turn_id):
+    """只保留白名单前缀。别的写法改回演练编号，避免十六进制真消息号进沙箱。"""
+    raw = str((turn or {}).get("message_id") or "")
+    if _OBS_MID.fullmatch(raw):
+        return raw
+    return "eval_%s_%s" % (case_id or "case", turn_id)
+
+
 def build_event(turn, bot_name):
     mid = str(turn.get("message_id") or "")
     chat_type = turn.get("chat_type") or "group"
@@ -235,7 +246,8 @@ def build_event(turn, bot_name):
     }
     if turn.get("root_id"):
         ev["root_id"] = turn["root_id"]
-    if chat_type != "p2p":
+    # 默认仍 @。金标要单独断言「没 @ 就不回答」，只有用例写明 mention:false 才不带。
+    if chat_type != "p2p" and turn.get("mention", True) is not False:
         ev["content"] = "@_user_1 " + text
         ev["mentions"] = [{"id": BOT, "key": "@_user_1", "name": bot_name}]
     return ev
@@ -411,10 +423,18 @@ def prepare_case(case, src_cfg, skills_dir, case_dir, redact_names):
         step = script + ".step"
         if os.path.isfile(step):
             os.remove(step)
-    return cfg, cfg_path, script, names
+    lark_stub = ""
+    stub = (case.get("setup") or {}).get("lark")
+    # 只给这一条用例的沙箱。用来让只读工具返回飞书错误码，确认前不会因此去连真飞书。
+    if isinstance(stub, dict) and stub:
+        lark_stub = os.path.join(case_dir, "lark.json")
+        with open(lark_stub, "w", encoding="utf-8") as f:
+            json.dump(stub, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    return cfg, cfg_path, script, names, lark_stub
 
 
-def case_env(base_env, mode, script, fixture, app_dir):
+def case_env(base_env, mode, script, fixture, app_dir, lark_stub=""):
     env = dict(base_env)
     for key in DROP_ENV:
         env.pop(key, None)
@@ -427,6 +447,8 @@ def case_env(base_env, mode, script, fixture, app_dir):
         env["AGENTBOT_FAKE_AGENT"] = "0"
         if script:
             env["AGENTBOT_FAKE_SCRIPT"] = script
+    if lark_stub:
+        env["AGENTBOT_FAKE_LARK"] = lark_stub
     return env
 
 
@@ -435,7 +457,7 @@ def run_case(case, src_cfg, skills_dir, work, mode, provider_name, timeout, judg
     case_dir = os.path.join(work, "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(case.get("id") or "case")))
     if os.path.isdir(case_dir):
         shutil.rmtree(case_dir, ignore_errors=True)
-    cfg, cfg_path, script, names = prepare_case(case, src_cfg, skills_dir, case_dir, redact_names)
+    cfg, cfg_path, script, names, lark_stub = prepare_case(case, src_cfg, skills_dir, case_dir, redact_names)
     app_dir = os.path.join(case_dir, "applocks")
     os.makedirs(app_dir, exist_ok=True)
     files_dir = os.path.join(case_dir, "files")
@@ -461,7 +483,7 @@ def run_case(case, src_cfg, skills_dir, work, mode, provider_name, timeout, judg
             codes.append(1)
             continue
         turn["text"] = text
-        turn["message_id"] = "eval_%s_%s" % (case.get("id") or "case", turn["id"])
+        turn["message_id"] = turn_message_id(turn, case.get("id"), turn["id"])
         if root_id:
             turn["root_id"] = root_id
         fixture = build_fixture(turn, case.get("setup") or {}, files_dir)
@@ -469,7 +491,7 @@ def run_case(case, src_cfg, skills_dir, work, mode, provider_name, timeout, judg
         with open(fix_path, "w", encoding="utf-8") as f:
             json.dump(fixture, f, ensure_ascii=False)
         turn["event"] = build_event(turn, bot_name)
-        env = case_env(base_env, mode, script, fix_path, app_dir)
+        env = case_env(base_env, mode, script, fix_path, app_dir, lark_stub)
         got = run_turn(turn, cfg_path, case_dir, env, timeout)
         turn_out[turn["id"]] = got
         logs.append(got["log"])
