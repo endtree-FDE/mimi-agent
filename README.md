@@ -1,6 +1,6 @@
 # Mimi Agent
 
-[![version](https://img.shields.io/badge/version-0.11.0-blue)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.13.0-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows-lightgrey)](scripts/setup.ps1)
 [![model](https://img.shields.io/badge/model-Cursor%20%7C%20OpenAI%20compatible-blueviolet)](docs/换模型.md)
