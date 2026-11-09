@@ -7,6 +7,7 @@
 - 每一项检查读什么、JSON 里哪个字段决定结论：见 [部署后验证.md](部署后验证.md)
 - 停机、单实例锁、进程号被复用：见 [升级停机与单实例.md](升级停机与单实例.md)
 - 多个机器人逐个升：见 [升级三个机器人.md](升级三个机器人.md)
+- 停和换版本要同一步、回滚别直接起旧进程、启动必须写 `-Config`、`shutdown.request` 怎么触发和验收：见 [运维升级回滚与停机意图.md](运维升级回滚与停机意图.md)
 - 动过模型或提示词之后的质量回归：见 [回归测试.md](回归测试.md)
 
 ## 前提
@@ -72,7 +73,7 @@ CI 的 Lint 那一格还盯一件只在 Linux 上才暴露的事：测试里的 
 4. `git -C D:\bots\甲 reset --hard <旧提交>`。
 5. 核对工作区里**升级之前的既有意图**没被这次 `reset --hard` 吞掉（未跟踪的文件、你已经删掉的东西）。这一条最容易被跳过，因为第 4 步看起来总是成功的。
 6. 配置仍是升级前那一份（比对 sha256，不要只看文件在不在）。
-7. `scripts\start.ps1` 启动。
+7. `scripts\start.ps1 -Config agents\甲.json` 启动。省略 `-Config` 会去读 `agents\example.json`。三行锁还在时不要直接运行旧的 `python agentbot.py`，见 [运维升级回滚与停机意图.md](运维升级回滚与停机意图.md)。
 8. 心跳：`state\heartbeat` 年龄小于 180 秒才算活着。
 9. `python checks\verify_deploy.py --base D:\bots\甲 -c agents\甲.json`：`status=PASS`、`serving=1`。
 10. **恢复看门狗**，并确认那条任务的状态真的回到 Ready。
