@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "id": "golden-wave3",
+  "description": "成熟度金标。名字、编号和密钥都是虚构的。不进 suite.json，也没有 ci 标签，日常 CI 不跑这整套。本地用假模型跑，见 docs/回归测试.md。",
+  "cases": [
+    {
+      "id": "golden-at-wake",
+      "title": "群里 @ 了机器人，才调用模型并回答",
+      "tags": ["golden", "wake"],
+      "turns": [{
+        "id": "t1",
+        "message_id": "om_obsfixturewake",
+        "sender": "user_member",
+        "text": "彩排定在周几"
+      }],
+      "fake": {"rounds": ["彩排定在周五。"]},
+      "checks": [
+        {"id": "answered", "type": "replied"},
+        {"id": "says-day", "type": "reply_contains", "value": "周五", "when": "fake"},
+        {"id": "used-model", "type": "log_contains", "value": "agent start"}
+      ]
+    },
+    {
+      "id": "golden-at-silent",
+      "title": "群里没有 @ 机器人时不回答，也不调用模型",
+      "tags": ["golden", "wake"],
+      "turns": [{
+        "id": "t1",
+        "message_id": "om_obsfixturesilent",
+        "sender": "user_member",
+        "mention": false,
+        "text": "彩排定在周几"
+      }],
+      "checks": [
+        {"id": "silent", "type": "no_reply"},
+        {"id": "no-model", "type": "log_absent", "value": "agent start"}
+      ]
+    },
+    {
+      "id": "golden-write-confirm",
+      "title": "白名单发起人只看到确认话术，回复确认码之后才写上已完成",
+      "tags": ["golden", "write-confirm", "write", "allows_write_exec"],
+      "setup": {"caps": ["docs"]},
+      "turns": [
+        {
+          "id": "t1",
+          "message_id": "om_obsfixtureconfirm",
+          "sender": "user_admin",
+          "text": "请把本周进展存成飞书文档，标题写周报。"
+        },
+        {
+          "id": "t2",
+          "message_id": "om_obsfixtureconfirm2",
+          "sender": "user_admin",
+          "text": "确认 {{code}}"
+        }
+      ],
+      "fake": {"rounds": [{"tool": "docs_create", "args": {"title": "周报", "markdown": "本周进展"}}]},
+      "checks": [
+        {"id": "will-do", "type": "reply_contains", "value": "将要执行：在专用文件夹新建文档《周报》", "turn": "t1", "when": "fake"},
+        {"id": "ask-owner", "type": "reply_contains", "value": "请发起人", "turn": "t1", "when": "fake"},
+        {"id": "say-confirm", "type": "reply_contains", "value": "回复「确认", "turn": "t1", "when": "fake"},
+        {"id": "say-cancel", "type": "reply_contains", "value": "或「取消", "turn": "t1", "when": "fake"},
+        {"id": "has-code", "type": "confirm_code", "turn": "t1", "when": "fake"},
+        {"id": "not-yet", "type": "reply_absent", "value": "已完成", "turn": "t1"},
+        {"id": "no-write-yet", "type": "log_count", "value": "docs +create", "eq": 0, "turn": "t1"},
+        {"id": "done", "type": "reply_contains", "value": "已完成", "turn": "t2", "when": "fake"},
+        {"id": "done-title", "type": "reply_contains", "value": "周报", "turn": "t2", "when": "fake"},
+        {"id": "wrote-once", "type": "log_count", "value": "docs +create", "eq": 1, "turn": "t2", "when": "fake"}
+      ]
+    },
+    {
+      "id": "golden-write-cancel",
+      "title": "发起人取消时回复已取消，并且不执行写入",
+      "tags": ["golden", "write-confirm", "write"],
+      "setup": {"caps": ["docs"]},
+      "turns": [
+        {
+          "id": "t1",
+          "message_id": "om_obsfixturecancel",
+          "sender": "user_admin",
+          "text": "请新建一份飞书文档，标题是周报。"
+        },
+        {
+          "id": "t2",
+          "message_id": "om_obsfixturecancel2",
+          "sender": "user_admin",
+          "text": "取消 {{code}}"
+        }
+      ],
+      "fake": {"rounds": [{"tool": "docs_create", "args": {"title": "周报", "markdown": "正文"}}]},
+      "checks": [
+        {"id": "has-code", "type": "confirm_code", "turn": "t1", "when": "fake"},
+        {"id": "cancelled", "type": "reply_contains", "value": "已取消", "turn": "t2"},
+        {"id": "not-done", "type": "reply_absent", "value": "已完成", "turn": "t2"},
+        {"id": "not-executed", "type": "log_count", "value": "docs +create", "eq": 0}
+      ]
+    },
+    {
+      "id": "golden-write-deny",
+      "title": "不在写入白名单里的人提议建文档会被拒绝，并且不给确认码",
+      "tags": ["golden", "write-deny", "write"],
+      "setup": {"caps": ["docs"]},
+      "turns": [{
+        "id": "t1",
+        "message_id": "om_obsfixturedeny",
+        "sender": "user_member",
+        "text": "请把本周进展存成飞书文档，标题写周报。"
+      }],
+      "fake": {"rounds": [{"tool": "docs_create", "args": {"title": "周报", "markdown": "本周进展"}}]},
+      "checks": [
+        {"id": "refused", "type": "reply_contains", "value": "不在写入白名单", "when": "fake"},
+        {"id": "no-code", "type": "no_confirm_code"},
+        {"id": "no-proposal", "type": "reply_absent", "value": "将要执行"},
+        {"id": "no-done", "type": "reply_absent", "value": "已完成"},
+        {"id": "called", "type": "tool_called", "value": "docs_create", "when": "fake"},
+        {"id": "not-executed", "type": "log_count", "value": "docs +create", "eq": 0}
+      ]
+    },
+    {
+      "id": "golden-tool-fail-kb",
+      "title": "知识库没有这个文件时，用一句原因说明，不把异常栈给提问者",
+      "tags": ["golden", "tool-fail"],
+      "turns": [{
+        "id": "t1",
+        "message_id": "om_obsfixturekbmiss",
+        "sender": "user_member",
+        "text": "请读取知识库 notes.txt。"
+      }],
+      "fake": {"rounds": [
+        {"tool": "kb_read", "args": {"path": "notes.txt"}},
+        "知识库里没有这个文件。请确认文件名后再问一次。"
+      ]},
+      "checks": [
+        {"id": "called", "type": "tool_called", "value": "kb_read", "when": "fake"},
+        {"id": "reason", "type": "prompt_contains", "value": "工具不可用：知识库里没有这个文件", "when": "fake"},
+        {"id": "friendly", "type": "reply_contains", "value": "知识库里没有这个文件。请确认文件名后再问一次。", "when": "fake"},
+        {"id": "no-trace", "type": "reply_absent", "value": "Traceback"},
+        {"id": "no-marker", "type": "reply_absent", "value": "<<TOOL>>"}
+      ]
+    },
+    {
+      "id": "golden-tool-fail-lark",
+      "title": "飞书限流时回复稍后再试，原始错误里的占位密钥不出现在回复里",
+      "tags": ["golden", "tool-fail"],
+      "setup": {
+        "caps": ["docs"],
+        "lark": {
+          "docs +fetch": {
+            "ok": false,
+            "error": {
+              "code": 99991400,
+              "message": "frequency limit api_key=supersecretvalue123"
+            }
+          }
+        }
+      },
+      "turns": [{
+        "id": "t1",
+        "message_id": "om_obsfixturelimit",
+        "sender": "user_member",
+        "text": "请读文档 doxgoldenwave。"
+      }],
+      "fake": {"rounds": [
+        {"tool": "docs_read", "args": {"doc": "doxgoldenwave"}},
+        "飞书限流了，请稍后再试。过一会儿再问我读这份文档。"
+      ]},
+      "checks": [
+        {"id": "called", "type": "tool_called", "value": "docs_read", "when": "fake"},
+        {"id": "reason", "type": "prompt_contains", "value": "工具不可用：飞书限流了，请稍后再试", "when": "fake"},
+        {"id": "friendly", "type": "reply_contains", "value": "飞书限流了，请稍后再试。", "when": "fake"},
+        {"id": "no-secret-reply", "type": "reply_absent", "value": "supersecretvalue123"},
+        {"id": "no-secret-prompt", "type": "prompt_absent", "value": "supersecretvalue123"},
+        {"id": "no-secret-log", "type": "log_absent", "value": "supersecretvalue123"},
+        {"id": "no-code", "type": "reply_absent", "value": "99991400"},
+        {"id": "no-trace", "type": "reply_absent", "value": "Traceback"}
+      ]
+    }
+  ]
+}

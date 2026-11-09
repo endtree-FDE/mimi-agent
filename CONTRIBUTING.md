@@ -28,6 +28,13 @@ python evals/run.py --config agents/example.json --provider fake --tag ci --base
 
 加用例和升级前怎么跑真模型，见 [docs/回归测试.md](docs/回归测试.md)。不要把 `evals/out/` 或真实聊天写进仓库。
 
+成熟度金标默认不进 `--tag ci`。提交前至少跑自检；改了这些用例或评测钩子时，再在本地用假模型跑整套：
+
+```text
+python checks/golden_wave3.py
+python evals/run.py --config agents/example.json --provider fake --suite evals/cases/golden_wave3.json --tag golden --out evals/out
+```
+
 另外运行：
 
 ```text
