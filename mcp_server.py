@@ -3,11 +3,12 @@
 # 为什么是 stdio：这台机器没有能对公网开放的端口（docs/多入口对照与方案.md 结论一），stdio 是
 # 父子进程管道，不监听端口、不经网络；本进程只读实例目录里的文件，主程序一个字节不用改。
 # 边界抄 OpenMausBot 的 v1 MCP server（github.com/milind-soni/OpenMausBot，docs/mcp-server.md）：
-# 只做只读三件事；不暴露审批、发送、配置修改、删除，密钥永不进输出——那些留在主人的对话里。
+# 只做只读的事；不暴露审批、发送、配置修改、删除，密钥永不进输出——那些留在主人的对话里。
+# list_pending 读的是写入确认队列（pending_queue.py），仍然不能代为确认。
 # 出这个进程的每个字节都当成出站正文看待：待审文件是访客写的内容，输出前统一过 guard.redact + neutralize。
 import json, os, re, sys, time
 import utf8io  # noqa: F401  管道强制 UTF-8，import 即生效
-import guard, intake
+import guard, intake, pending_queue
 
 SERVER_NAME = "mimi-agent-mcp"
 _PROTOCOL_DEFAULT = "2024-11-05"   # 客户端没带版本时兜底；带了就原样回它的
@@ -125,6 +126,23 @@ def _tool_list_leads(args, inst):
             "blocks": [{"head": b["head"], "text": _wash(b["text"], inst["names"])} for b in page]}
 
 
+def _tool_list_pending(args, inst):
+    """待确认写入。view 已经丢掉确认码和编号；摘要再洗一遍，和待审意向同一道出口。"""
+    snap = pending_queue.view(inst["base"], names=inst["names"])
+    limit = args.get("limit", 20)
+
+    def wash(item):
+        out = dict(item)
+        out["summary"] = _wash(out.get("summary") or "", inst["names"])
+        return out
+
+    pending = [wash(item) for item in snap["pending"][:limit]]
+    expired = [wash(item) for item in snap["expired"][:limit]]
+    return {"readable": snap["readable"],
+            "pending_total": len(snap["pending"]), "expired_total": len(snap["expired"]),
+            "pending": pending, "expired": expired}
+
+
 def _tool_search_leads(args, inst):
     query = args["query"].lower()
     hits = [b for b in _read_blocks(inst) if query in b["head"].lower() or query in b["text"].lower()]
@@ -193,6 +211,12 @@ TOOLS = [
                                     "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
                      "required": ["query"], "additionalProperties": False},
      "run": _tool_search_leads},
+    {"name": "list_pending",
+     "description": "只读：当前待确认的写入提案（最新的在前），以及近期超时记成 expired 的条目。不含确认码、按钮记号、open_id 明文和写入参数；不能审批，也不能代为确认。",
+     "inputSchema": {"type": "object",
+                     "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 50}},
+                     "additionalProperties": False},
+     "run": _tool_list_pending},
 ]
 _TOOLS = {tool["name"]: tool for tool in TOOLS}
 _TOOLS_DESC = [{"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]} for t in TOOLS]
@@ -245,7 +269,7 @@ def handle(msg, inst):
         return _rpc_ok(ident, {"protocolVersion": version,
                                "capabilities": {"tools": {"listChanged": False}},
                                "serverInfo": {"name": SERVER_NAME, "version": _product_version() or "0"},
-                               "instructions": "只读控制面：查机器人状态、看待审合作意向。"
+                               "instructions": "只读控制面：查机器人状态、看待审合作意向、看待确认的写入。"
                                                "不提供发送、审批、改配置、删除，也没有任何密钥。"})
     if method == "ping":
         return None if ident is None else _rpc_ok(ident, {})

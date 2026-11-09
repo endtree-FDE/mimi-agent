@@ -345,7 +345,8 @@ python checks/check_config.py agents/example.json
 | 键 | 填什么 |
 |---|---|
 | `enabled` | `true` 才允许提议写入。升级时可以先改成 `false`，等只读稳定了再开。 |
-| `confirm_ttl_sec` | 确认码有效秒数，默认 `300`（5 分钟）。确认码写在 `state/state.db`，进程重启后、过期之前仍然有效。过期或用过就删掉。 |
+| `confirm_ttl_sec` | 确认码有效秒数，默认 `300`（5 分钟）。确认码写在 `state/state.db`，进程重启后、过期之前仍然有效。过期或用过就从待确认里删掉。过期的会在本机 `state/confirm_expired.jsonl` 记成 `expired`，见下面「确认超时与待确认队列」。 |
+| `escalate` | 确认超时后要不要私聊提醒。不写或 `enabled` 不是 `true` 时不发消息。细节见下面一节。 |
 | `allowed_users` | 谁可以发起写入、谁可以改群记忆。左边是这个人的编号，右边是称呼，例如 `"REPLACE_USER_OPEN_ID": "小李"`。右边的称呼只用于回复和审计，改成真人的称呼。 |
 | `resources.folder_token` | 专用文档文件夹的编号。新建文档只进这个文件夹。 |
 | `resources.docs_append_tokens` | 允许在末尾追加的文档编号列表。空列表表示还不能追加。 |
@@ -429,6 +430,30 @@ python checks/check_config.py agents/example.json
   ]
 }
 ```
+
+### 确认超时与待确认队列
+
+时效不另设一套。确认码用上面的 `confirm_ttl_sec`（不写是 300 秒），按钮用 `confirm.ttl_sec`（不写是 600 秒）。到点还没确认：这次不执行，确认码作废，审计记一行 `write_expired`。同时往本机 `state/confirm_expired.jsonl` 追加一条，`status` 为 `expired`。这个文件在 `state/` 里，不入库。同一次超时只记一条，重启不会再刷一条，也不会再发一次提醒。
+
+只读查看还没确认的提案，以及近期过期的记录（没有确认码、按钮记号、写入参数，也没有 open_id 明文）：
+
+```text
+python pending_queue.py <实例目录>
+python agentbot.py <配置>.json --doctor
+```
+
+`--doctor` 多一行 `pending`，只报条数和工具名。读不到队列时这行是 `WARN`，不因此判失败，也不新建数据库。MCP 控制面多一个只读工具 `list_pending`（不起这个进程就没有）。三处都不能代为确认。
+
+可选提醒写在 `write.escalate`。默认关。不写、`enabled` 不是 `true`、或 `notify` 为 `none` 时，超时只留本机日志和状态文件。
+
+| `notify` | 发给谁 |
+|---|---|
+| `owner`（不写也是这个） | 主人私聊。名单和用量周报相同：先用 `report.owner_open_ids`，空着再用 `alerts.owner_open_ids`。不要求断线提醒已经打开。 |
+| `initiator` | 私聊发起人本人。 |
+| `both` | 上面两边。同一个人只发一条。 |
+| `none` | 仍然不发。 |
+
+没有可用的私聊对象时，不改发到群里，日志里留一句，状态文件记 `no_route`。群号（`oc_` 开头）和 `REPLACE_` 占位符不会被当成接收人。演练（dry-run）也不发。确认码、双人复核、白名单都不因这项打开而变化。
 
 ## 确认 confirm
 

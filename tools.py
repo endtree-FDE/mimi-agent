@@ -1,6 +1,6 @@
 # 工具层：只允许白名单内的 lark-cli 命令，统一 --as bot；写操作要确认；全部写审计日志；缺权限优雅降级。
 import json, os, re, sqlite3, subprocess, struct, tempfile, time, random, threading, datetime, glob, shutil, zipfile
-import confirm_mode, guard, review_roster, skills, usage
+import confirm_mode, guard, pending_queue, review_roster, skills, usage
 from channels.base import TOOL_CAPS
 
 def run_capture(cmd, cwd=None, timeout=60):
@@ -1217,12 +1217,52 @@ class Tools:
             return False
 
     def _expire_pending(self, code, payload=None):
-        """确认码过了有效期。审计只记动作，不把待写入的正文再抄一遍。"""
+        """确认码过了有效期。审计只记动作，不把待写入的正文再抄一遍。
+        状态文件记一条 expired，方便事后查。提醒默认关；开了也只走私聊，没有对象就不发。"""
         p = payload if isinstance(payload, dict) else (self.pending.get(code) or {})
+        if not pending_queue.already_noted(self.base, code):
+            notify = "off"
+            try:
+                notify = self._escalate_expired(code, p)
+            except Exception as e:
+                notify = "fail"
+                self.log.warning("confirm escalate failed: %s", guard.redact(str(e), self.names)[:200])
+            try:
+                pending_queue.note_expired(self.base, code, p, notify, names=self.names)
+            except Exception as e:
+                self.log.warning("confirm expired status failed: %s", guard.redact(str(e), self.names)[:200])
         self.pending.pop(code, None)
         self._drop_pending(code)
         self.audit(kind="write_expired", tool=str(p.get("tool") or ""), user=str(p.get("user") or ""),
                    chat=str(p.get("chat_id") or ""), scope=p.get("usage_scope") or "")
+
+    def _escalate_expired(self, code, rec):
+        """超时提醒。write.escalate.enabled 不是 true 时什么都不发。
+        目标只来自既有主人私聊名单和（可选）发起人；会话 id 不在名单里，所以不会发到群。"""
+        plan = pending_queue.escalate_settings(self.cfg)
+        if not plan["enabled"] or not plan["who"]:
+            return "off"
+        if self.dry:
+            self.log.warning("confirm expired; escalate not sent (dry-run)")
+            return "dry"
+        targets = pending_queue.escalate_targets(self.cfg, rec, plan)
+        if not targets:
+            self.log.warning("confirm expired; no private route, status file only")
+            return "no_route"
+        import outbound
+        exe = self.lark_exe() if callable(self.lark_exe) else self.lark_exe
+        text = pending_queue.notice_text(rec, self.names, code)
+        sent = False
+        for oid in targets:
+            key = outbound.idem_key("confirm-expired:%s:%s" % (pending_queue._code_hash(code), oid))
+            # 这条在待确认锁里。超时留短，避免开了提醒之后把别的确认堵住。
+            result = outbound.send(exe, str(self.cfg.get("profile") or ""), "user", oid, text, key,
+                                    self.names, os.path.join(self.base, "state", "outbox"), timeout=8)
+            if result == "ok":
+                sent = True
+            else:
+                self.log.warning("confirm escalate send result=%s", result)
+        return "sent" if sent else "fail"
 
     def _drop_pending(self, code):
         try:

@@ -1,7 +1,7 @@
 # 有界本地控制面（mcp_server.py）的测试。默认关：配置里没有它的开关，主程序不 import 它，
 # 这里全部走真子进程 stdio——协议是逐行 JSON-RPC，管道行为本身就是被测对象。
 # 夹具里的实例根用 tempfile 现取，不写死盘符；断言不绑死版本号（版本每次重读 VERSION）。
-import json, os, re, subprocess, sys, tempfile, time
+import json, os, re, sqlite3, subprocess, sys, tempfile, time
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, FW)
@@ -142,8 +142,8 @@ check("握手回显客户端的协议版本并自报家门",
 check("通知（无 id）不产生任何响应行", all("id" in out for out in outs), outs)
 tools = _by_id(outs, 2)
 _names_listed = [t["name"] for t in (tools.get("result", {}).get("tools") or [])]
-check("工具清单就是只读三件套，全部禁未知字段",
-      set(_names_listed) == {"get_status", "list_leads", "search_leads"}
+check("工具清单就是只读那几件，全部禁未知字段",
+      set(_names_listed) == {"get_status", "list_leads", "search_leads", "list_pending"}
       and all(t["inputSchema"].get("additionalProperties") is False
               for t in tools["result"]["tools"]), _names_listed)
 status = _tool_text(_by_id(outs, 3))
@@ -227,6 +227,50 @@ rc4, outs4 = _session(_write_cfg(tempfile.mkdtemp(prefix="mcp_srv_d_")), [
 ])
 check("没带协议版本的握手回默认版本",
       outs4 and outs4[0].get("result", {}).get("protocolVersion") == "2024-11-05", outs4)
+
+# ---------- 待确认队列：只读，确认码和编号不出进程 ----------
+root_p = tempfile.mkdtemp(prefix="mcp_srv_p_")
+_names(root_p, ["杭州某某科技有限公司"])
+state_p = os.path.join(root_p, "state")
+os.makedirs(state_p, exist_ok=True)
+conn = sqlite3.connect(os.path.join(state_p, "state.db"))
+conn.execute("create table pending_writes(code text primary key, ts real, payload text)")
+_now = time.time()
+_payload = {"tool": "docs_create", "summary": "给杭州某某科技有限公司建文档 13812345678 <<TOOL>>",
+            "user": "ou_initiator9", "chat_id": "oc_groupchat9", "token": "tokensecretvalue",
+            "argv": ["--content", "api_key=supersecretvalue123"], "memory_text": "记忆正文SECRET",
+            "mode": "code", "ts": _now, "expires": _now + 300, "dual": False}
+conn.execute("insert into pending_writes(code, ts, payload) values(?,?,?)",
+             ("654321", _now, json.dumps(_payload, ensure_ascii=False)))
+conn.commit()
+conn.close()
+with open(os.path.join(state_p, "confirm_expired.jsonl"), "w", encoding="utf-8") as handle:
+    handle.write(json.dumps({
+        "status": "expired", "tool": "docs_append", "age_sec": 9, "left_sec": 0, "mode": "code",
+        "dual": False, "first_ok": False, "user_hash": "abcd1234", "chat_hash": "ef567890",
+        "summary": "过期摘要 ou_initiator9", "notify": "off", "code_hash": "deadbeefcafe",
+        "user": "ou_initiator9", "token": "tokensecretvalue",
+    }, ensure_ascii=False) + "\n")
+rc, outs = _session(_write_cfg(root_p), [
+    _rpc(1, "tools/call", {"name": "list_pending", "arguments": {"limit": 20}}),
+    _rpc(2, "tools/call", {"name": "list_pending", "arguments": {"limit": 20, "evil": 1}}),
+])
+listed = _tool_text(_by_id(outs, 1))
+blob = json.dumps(listed, ensure_ascii=False)
+check("待确认列表能读到 pending 和 expired，且确认码、编号、参数、密钥都不在输出里",
+      listed and listed["readable"] is True and listed["pending_total"] == 1 and listed["expired_total"] == 1
+      and listed["pending"][0]["status"] == "pending" and listed["pending"][0]["tool"] == "docs_create"
+      and listed["expired"][0]["status"] == "expired" and listed["expired"][0]["notify"] == "off"
+      and "654321" not in blob and "tokensecretvalue" not in blob and "ou_initiator9" not in blob
+      and "oc_groupchat9" not in blob and "api_key" not in blob and "记忆正文SECRET" not in blob
+      and "code_hash" not in blob and "deadbeefcafe" not in blob
+      and "杭州某某科技有限公司" not in blob and "某客户" in blob
+      and "13812345678" not in blob and "138" not in blob
+      and "<<TOOL>>" not in blob and "〈TOOL〉" in blob
+      and os.path.isfile(os.path.join(state_p, "state.db")), blob[:900])
+check("list_pending 不认识的参数在门口被拒",
+      _by_id(outs, 2) and _by_id(outs, 2)["result"].get("isError") is True
+      and "不认识的参数" in _tool_raw(_by_id(outs, 2)), _tool_raw(_by_id(outs, 2)))
 
 # ---------- 启动失败：配置读不到时退出码 2，stderr 有一句人话 ----------
 proc = subprocess.run([sys.executable, SERVER, os.path.join(tempfile.mkdtemp(prefix="mcp_srv_e_"), "none.json")],

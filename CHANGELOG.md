@@ -18,6 +18,7 @@
 - `--doctor` 增加四行只读结果：进程在跑、正在停还是已停（`service`），最近一次成功应答的时间（`last_ok`），最近一条失败的一句话（`last_fail`，不打堆栈），以及通过、警告、失败项名单（`checklist`）。读的是已有的锁、心跳、停机请求和本机日志；没有记录就直接说没有。不发消息，不写心跳，没在跑本身也不判失败。
 - 固定问答回归：`evals/fixtures/golden` 放脱敏假会话和假工具结果，`python checks/eval_smoke.py` 断言拒答、需确认和只读成功。不连飞书、不调模型，也不改默认外发。见 [docs/回归测试.md](docs/回归测试.md)。
 - 复核值班表 `write.review_roster`，默认关。打开后，门禁 dual 的第二位必须是当前时段值班、并且也在写入白名单里的另一位管理员；没配或 `enabled` 不是 true 时，仍是白名单里任意另一位，行为与现在相同。值班表不能把白名单外的人放进来，也不把日常 L2 抬成 dual，确认不能关。回滚：`enabled` 改回 false 或删掉整段。见 [agents/CONFIG.md](agents/CONFIG.md) 的「复核值班表」。
+- 确认超时后本机可查：写提案超过既有确认时效仍未确认时，记一条脱敏的 `expired` 状态（`state/confirm_expired.jsonl`，不含确认码和 open_id 明文）；`--doctor`、MCP `list_pending` 和 `python pending_queue.py` 能只读列出当前 pending。可选 `write.escalate`（默认关）超时后私聊主人或发起人；没有可用私聊对象就只留日志和状态文件，不往群里发。确认码、双人复核和白名单都不改。
 
 ### 修复
 

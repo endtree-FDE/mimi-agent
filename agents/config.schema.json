@@ -716,6 +716,21 @@
       "additionalProperties": true,
       "description": "写入开关与白名单。decision_gate 子键是 juchang 决策门禁：声明哪些写工具过门禁、各是什么等级。",
       "properties": {
+        "escalate": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "确认超时后的可选私聊提醒。不写或 enabled 不是 true 时不发消息，只留本机状态。不往群里发。",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "notify": {
+              "type": "string",
+              "enum": ["owner", "initiator", "both", "none"],
+              "description": "owner 用既有主人私聊名单；initiator 私聊发起人；both 两边；none 仍不发。不写是 owner，但 enabled 不为 true 时根本不发。"
+            }
+          }
+        },
         "decision_gate": {
           "type": "object",
           "additionalProperties": true,
