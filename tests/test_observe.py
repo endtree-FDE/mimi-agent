@@ -51,8 +51,8 @@ finally:
     shutil.rmtree(log_dir, ignore_errors=True)
 
 check("密钥字段只报名字",
-      doctor.secret_keys({"app_secret": "supersecretvalue", "tools": {"docs_read": {"enabled": True}}}) == ["app_secret"]
-      and "supersecretvalue" not in str(doctor.secret_keys({"nested": {"password": "p"}})))
+      doctor.secret_keys({"app_secret": "supersecretvalue123", "tools": {"docs_read": {"enabled": True}}}) == ["app_secret"]
+      and "supersecretvalue123" not in str(doctor.secret_keys({"nested": {"password": "p"}})))
 cfg_min = {"profile": "placeholder", "features": {"p2p": False, "attachments": False}, "progress": {"enabled": False},
            "tools": {"history": {"enabled": True}}, "chat_ids": ["oc_placeholder"]}
 check("只要求已启用能力的 scope",
@@ -506,6 +506,164 @@ check("诊断里带上这一行，核对脚本才带得出来",
       "restart" in [ln.split()[1] for ln in _os_lines] and "WARN restart" in _os_text
       and _os_code == 0, _os_text)
 shutil.rmtree(_led, ignore_errors=True)
+
+_stack = "\n".join([
+    "handle error: TimeoutError: 打不开 C:\\Users\\someone\\secret.txt",
+    "Traceback (most recent call last):",
+    "  File \"C:\\Users\\someone\\agentbot.py\", line 10, in handle",
+    "    raise TimeoutError(\"13812345678\")",
+    "TimeoutError: 13812345678",
+])
+_collapsed = doctor.collapse_reason(_stack)
+check("失败原因收成一句，堆栈和 File 行不留",
+      _collapsed.startswith("handle error:") and "Traceback" not in _collapsed
+      and "File \"" not in _collapsed and "line 10" not in _collapsed, _collapsed)
+check("只有堆栈时留下异常那一句",
+      doctor.collapse_reason("Traceback (most recent call last):\n  File \"x.py\", line 1, in <module>\nRuntimeError: 连不上")
+      == "RuntimeError: 连不上")
+
+_ops = tempfile.mkdtemp(prefix="agentbot_ops_")
+_ops_now = _time.time()
+
+
+def _ops_clock(epoch):
+    return _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(epoch))
+
+
+def _ops_ts(epoch):
+    return _time.strftime("%Y-%m-%dT%H:%M:%S", _time.localtime(epoch))
+
+
+def _ops_names(rows):
+    return [ln.split()[1] for ln in rows]
+
+
+_empty_before = os.listdir(_ops)
+_lv, _info = doctor.service_status(_ops, [], _ops_now, {})
+_ok_lv, _ok_info = doctor.last_success(_ops, _ops_now)
+_fail_lv, _fail_info = doctor.last_failure(_ops, _ops_now)
+check("没跑过时起停、成功、失败都可读，而且不建文件",
+      _lv == "OK" and "已停止" in _info and "没有 state/bot.lock" in _info
+      and _ok_lv == "OK" and "还没有成功应答" in _ok_info
+      and _fail_lv == "OK" and "没有失败记录" in _fail_info
+      and os.listdir(_ops) == _empty_before
+      and not os.path.isfile(os.path.join(_ops, "state", "heartbeat"))
+      and not os.path.isfile(os.path.join(_ops, "state", "shutdown.request")),
+      _info + "\n" + _ok_info + "\n" + _fail_info)
+_lv, _info = doctor.service_status(_ops, None, _ops_now, {})
+check("列不出进程时看不出生死，不写成正在服务",
+      _lv == "WARN" and "列不出进程" in _info and "serving=0" not in _info, _info)
+
+os.makedirs(os.path.join(_ops, "state"))
+os.makedirs(os.path.join(_ops, "logs"))
+_lock_path = os.path.join(_ops, "state", "bot.lock")
+open(_lock_path, "w", encoding="utf-8").write("42\ncreated=token\nbase=%s\n" % _ops)
+open(os.path.join(_ops, "state", "heartbeat"), "w", encoding="utf-8").write(str(int(_ops_now - 12)))
+_serve = "python %s %s" % (os.path.join(_ops, "agentbot.py"), os.path.join(_ops, "a.json"))
+_lv, _info = doctor.service_status(_ops, [{"pid": 42, "cmdline": _serve}], _ops_now, {})
+check("锁和进程对得上就是运行中，并读出心跳时间",
+      _lv == "OK" and "运行中" in _info and "pid=42" in _info and "12 秒前" in _info
+      and _ops_clock(_ops_now - 12) in _info and _ops not in _info, _info)
+_lv, _info = doctor.service_status(
+    _ops, [{"pid": 42, "cmdline": _serve + " --doctor"}], _ops_now, {})
+check("只有 --doctor 进程不算在跑",
+      _lv == "WARN" and "已停止" in _info and "运行中" not in _info, _info)
+open(os.path.join(_ops, "state", "shutdown.request"), "w", encoding="utf-8").write("1")
+_lv, _info = doctor.service_status(_ops, [{"pid": 42, "cmdline": _serve}], _ops_now, {})
+check("停机请求还在、进程也在，就是正在停止",
+      _lv == "WARN" and "正在停止" in _info and "pid=42" in _info, _info)
+os.remove(os.path.join(_ops, "state", "shutdown.request"))
+open(_lock_path, "w", encoding="utf-8").write("99\ncreated=token\nbase=%s\n" % _ops)
+_lv, _info = doctor.service_status(_ops, [], _ops_now, {})
+check("锁还在但进程不在，说成过期锁，不提出结束进程",
+      _lv == "WARN" and "已停止" in _info and "pid 99" in _info and "过期锁" in _info
+      and "结束" in _info and "taskkill" not in _info.lower(), _info)
+open(_lock_path, "w", encoding="utf-8").write("42\ncreated=token\nbase=C:\\Users\\someone\\other\n")  # win-path
+open(os.path.join(_ops, "state", "heartbeat"), "w", encoding="utf-8").write(str(int(_ops_now - 1000)))
+_lv, _info = doctor.service_status(
+    _ops, [{"pid": 42, "cmdline": _serve}, {"pid": 43, "cmdline": _serve}], _ops_now,
+    {"alerts": {"unhealthy_after_sec": 180}})
+check("心跳过期和重复进程只是警告，锁里的目录不打出来",
+      _lv == "WARN" and "运行中" in _info and "告警线 180 秒" in _info
+      and "2 个服务进程" in _info and "不一致" in _info
+      and "someone" not in _info and "C:" not in _info, _info)
+
+_events = os.path.join(_ops, "logs", "events.jsonl")
+_journal = os.path.join(_ops, "logs", "journal.jsonl")
+_botlog = os.path.join(_ops, "logs", "bot.log")
+open(_journal, "w", encoding="utf-8").write(json.dumps({
+    "ts": _ops_ts(_ops_now - 30), "kind": "answer", "ok": 1, "chat": "group"}) + "\n")
+_lv, _info = doctor.last_success(_ops, _ops_now)
+check("成功应答时间从 journal 读出",
+      _lv == "OK" and "最近一次成功应答" in _info and _ops_clock(_ops_now - 30) in _info, _info)
+open(_events, "w", encoding="utf-8").write("\n".join([
+    json.dumps({"kind": "answer", "ok": False, "ts": _ops_ts(_ops_now - 50), "mid": "om_obsfixture1",
+                "tools": []}),
+    json.dumps({"kind": "tool", "ok": False, "tool": "docs_read", "code": "99991672",
+                "err": "读不到 13812345678\nTraceback (most recent call last):\n  File \"x.py\", line 3, in f\n    pass",
+                "ts": _ops_ts(_ops_now - 40)}),
+    json.dumps({"kind": "answer", "ok": True, "ts": _ops_ts(_ops_now - 20), "tools": []}),
+    json.dumps({"kind": "consumer", "event": "im.message.receive_v1", "rc": 3, "cause": "dns",
+                "code": "token_missing", "ts": _ops_ts(_ops_now - 80),
+                "tail": "Traceback (most recent call last):\n13812345678 打不开域名"}),
+]) + "\n")
+_lv, _info = doctor.last_success(_ops, _ops_now)
+check("events 和 journal 里取更晚的一次成功",
+      _lv == "OK" and _ops_clock(_ops_now - 20) in _info, _info)
+_lv, _info = doctor.last_failure(_ops, _ops_now)
+check("最近失败是一句，成功之后仍算通过，不打堆栈、手机号和 stderr 尾部",
+      _lv == "OK" and "已经成功应答过" in _info and "错误码 99991672" in _info
+      and "Traceback" not in _info and "File \"" not in _info and "13812345678" not in _info
+      and "打不开域名" not in _info and "om_obsfixture1" not in _info
+      and "\n" not in _info, _info)
+open(_botlog, "w", encoding="utf-8").write(
+    "%s INFO ready\n%s ERROR handle error: TimeoutError: 打不开 C:\\Users\\someone\\secret.txt 13812345678 app_secret=supersecretvalue123 \n"
+    "Traceback (most recent call last):\n  File \"C:\\Users\\someone\\agentbot.py\", line 10, in handle\n"
+    "TimeoutError: 13812345678\n%s WARNING stale pidfile\n"
+    % (_ops_clock(_ops_now - 15), _ops_clock(_ops_now - 10), _ops_clock(_ops_now - 9)))
+open(_events, "w", encoding="utf-8").write(json.dumps({
+    "kind": "answer", "ok": False, "ts": _ops_ts(_ops_now - 10), "tools": []}) + "\n")
+_lv, _info = doctor.last_failure(_ops, _ops_now)
+check("结构化日志没有原因时，用同时刻的 bot.log 收成一句",
+      _lv == "WARN" and "最近一条失败" in _info and "TimeoutError" in _info
+      and "Traceback" not in _info and "File \"" not in _info and "line 10" not in _info
+      and "13812345678" not in _info and "someone" not in _info and "supersecretvalue123" not in _info
+      and "stale pidfile" not in _info and "\n" not in _info, _info)
+_chk_lv, _chk_info = doctor.checklist_row([
+    "OK   package pypdf",
+    "WARN package openpyxl 未安装",
+    "OK   config 没有 app_secret",
+    "FAIL scopes 缺少 im:message:send_as_bot",
+    "OK   service 运行中",
+])
+_passed, _warned, _failed = _chk_info.split("。")[:3]
+check("通过、警告、失败分三列，同一个名字只进最严重的一档",
+      _chk_lv == "FAIL" and "config" in _passed and "service" in _passed and "package" not in _passed
+      and "package" in _warned and "scopes" in _failed and "scopes" not in _passed, _chk_info)
+
+_before_calls = len(calls)
+_files_before = []
+for _root, _dirs, _files in os.walk(_ops):
+    for _name in _files:
+        _files_before.append(os.path.join(_root, _name))
+_rows, _code = doctor.report(cfg_min, _ops, ["lark-cli"], run, lambda: [{"pid": 7, "cmdline": _serve + " --doctor"}],
+                             lambda host: [("1.2.3.4", 443)], lambda host, port: True,
+                             {"pypdf": True, "openpyxl": True, "PIL": True}, {"NO_PROXY": "open.feishu.cn"})
+_text = "\n".join(_rows)
+_names = _ops_names(_rows)
+_files_after = []
+for _root, _dirs, _files in os.walk(_ops):
+    for _name in _files:
+        _files_after.append(os.path.join(_root, _name))
+check("诊断末尾列出起停、成功时间、失败原因和通过失败项",
+      _names[-4:] == ["service", "last_ok", "last_fail", "checklist"]
+      and "通过" in _rows[-1] and "警告" in _rows[-1] and "失败" in _rows[-1], _text)
+check("这些探针不新开连接，也不写心跳和日志",
+      len(calls) - _before_calls == 4
+      and all("consume" not in c and "send" not in " ".join(c) and "reply" not in " ".join(c) for c in calls[_before_calls:])
+      and sorted(_files_before) == sorted(_files_after)
+      and _code == 0 and "FAIL" not in _text, _text + "\n" + str(calls[_before_calls:]))
+shutil.rmtree(_ops, ignore_errors=True)
 
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)

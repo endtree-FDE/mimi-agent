@@ -14,6 +14,7 @@
 - 双人复核（门禁 dual 路由的正式实现，此前 v1 只是文案提示）：`write.decision_gate` 路由给出 `approval: dual` 时，发起人回复「确认 码」只记下、不执行；需另一位写入白名单管理员在同一会话回复「复核 码」才真正执行。发起人自己复核不算、复核人不在白名单被拒并留痕、只有一位确认不动任何数据；取消不挡（发起人随时可撤）。审计链依次落 `write_confirmed`（dual first / dual second）与 `write_done`，与既有确认码共用时效与一次性约束。试运行配置只声明 L2/medium 时永不触发，行为与从前相同。
 - 双人复核离线演练说明：[docs/双人复核离线演练.md](docs/双人复核离线演练.md)。写明何时用 dual（高风险写）、离线跑哪些测试、沙箱里临时把单个写工具的 impact 抬到 critical 后由两位白名单管理员确认、演完立刻改回 L2。不改默认配置；生产幕幕与 Mimi 的日常写动作保持 L2，不启用 dual。
 - 决策门禁 L2 运维口径（幕幕与 Mimi 相同）：写提案门禁只挂 `docs_create` 与 `base_create`，等级都是字符串 `L2`；不挂 `calendar_create`、`docs_append`、`memory_propose`，也不把 `impact` 写成 `critical`（那才会走到上面的双人复核）。怎么开、删掉 `write.decision_gate` 整段回滚、和确认码白名单的关系、试跑时看审计，写在 [agents/CONFIG.md](agents/CONFIG.md) 与 [docs/决策门禁对照与接入方案.md](docs/决策门禁对照与接入方案.md)。示例配置收到这两项，`enabled` 仍是 `false`。
+- `--doctor` 增加四行只读结果：进程在跑、正在停还是已停（`service`），最近一次成功应答的时间（`last_ok`），最近一条失败的一句话（`last_fail`，不打堆栈），以及通过、警告、失败项名单（`checklist`）。读的是已有的锁、心跳、停机请求和本机日志；没有记录就直接说没有。不发消息，不写心跳，没在跑本身也不判失败。
 
 ### 修复
 

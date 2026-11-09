@@ -463,7 +463,7 @@ python checks/check_config.py agents/example.json
 
 `logs/events.jsonl` 是诊断日志，没有单独的开关。每道题记一条回答，每个工具记一条：消息编号、工具名、是否成功、飞书错误码、耗时。问题原文不写进去。看起来像手机号、邮箱或密钥的字符串会打码。大约 2MB 轮转，保留 5 份 `.1`。`--doctor` 不写这个文件，也不写心跳。
 
-`python agentbot.py agents/<名字>.json --doctor` 只做只读诊断：登录、权限、事件订阅、网络、依赖、是不是已经有一份在跑。不发消息，不启动收消息的进程。Windows 上部署之后可以用 `powershell.exe -File scripts\verify_windows.ps1` 再看一遍本机进程和最近的 `logs\events.jsonl`。这个脚本只在 Windows 上读本机进程。
+`python agentbot.py agents/<名字>.json --doctor` 只做只读诊断：登录、权限、事件订阅、网络、依赖、进程是在跑还是已停、最近一次成功应答的时间、最近一条失败（一句，不打堆栈），以及通过、警告、失败项名单。时间从 `logs/events.jsonl` 和 `logs/journal.jsonl` 读，原因不够时才看 `logs/bot.log` 的最后一条 ERROR。不发消息，不启动收消息的进程，也不写这些文件。Windows 上部署之后可以用 `powershell.exe -File scripts\verify_windows.ps1` 再看一遍本机进程和最近的 `logs\events.jsonl`。这个脚本只在 Windows 上读本机进程。
 
 ## 断线提醒 alerts
 
