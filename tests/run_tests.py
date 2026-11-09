@@ -2758,6 +2758,11 @@ print("\n-- lint selftest --", flush=True)
 _ls = _run([sys.executable, os.path.join(FW, "checks", "lint.py"), "--selftest"], cwd=FW,
            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 check("lint 规则自检（坏样例命中、好样例不误报）", _ls.returncode == 0, (_ls.stdout or "") + (_ls.stderr or ""))
+
+print("\n-- gates status --", flush=True)
+_gs = _run([sys.executable, os.path.join(FW, "tests", "test_gates_status.py")], cwd=FW,
+           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+check("门禁状态行（/状态 一行：三门开关 + 最近 7 天计数与阻断摘要）", _gs.returncode == 0, (_gs.stdout or "") + (_gs.stderr or ""))
 print("\n-- report --", flush=True)
 _rp = _run([sys.executable, os.path.join(FW, "tests", "test_report.py")], cwd=FW)
 results.append(("用量周报", _rp.returncode == 0))
