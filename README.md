@@ -84,7 +84,7 @@ flowchart LR
 - 分群知识库检索默认关着。打开后，本群的资料能被搜到，回答会写上来源标题、章节或页码。见 [docs/知识库.md](docs/知识库.md)。
 - 技能默认关着。打开后，提示词里只放一行目录，命中触发词才放入步骤。创作流程（选题、口播、分镜、提示词、策划书、复盘）也在 `skills/` 里，默认不启用；要只用这几份时，在配置里点名。见 [docs/技能.md](docs/技能.md)。
 - 常驻模式默认关着。`agent.mode` 写成 `acp` 后，Cursor 只启动一次。见 [docs/常驻模式.md](docs/常驻模式.md)。
-- 本地控制面默认关着：`python mcp_server.py agents/你的配置.json` 用 stdio 起一个只读 MCP server，本机的 MCP 客户端能查状态、看待审合作意向。不监听端口、不发消息、没有写入口；配置里没有它的任何键，不起它就不存在。见 [docs/OpenMausBot对照与升级方案.md](docs/OpenMausBot对照与升级方案.md)。
+- 本地控制面默认关着：`python mcp_server.py agents/你的配置.json` 用 stdio 起一个只读 MCP server，本机的 MCP 客户端能查状态、看待审合作意向。不监听端口、不发消息、没有写入口；配置里没有它的任何键，不起它就不存在。项目级接线见 [docs/本地控制面.md](docs/本地控制面.md)，设计取舍见 [docs/OpenMausBot对照与升级方案.md](docs/OpenMausBot对照与升级方案.md)。
 - 据场三门默认关着，配进 `skills/` 后各守一段：`decision_gate_check` 按「证据状态×动作等级×可逆性」给写提案算路由（允许进确认 / 需确认 / 阻断 / 只允许人工），`write.decision_gate` 打开后写提案自动过这道门，路由依据进审计；`evidence_replay_check` 核对回放归档（配套 `freeze-audit.mjs` 零写入冻结群记忆+审计链成可重算哈希的只读档案），`receipt_verify` 离线核验 Matrix 回执导出。三个工具都只读、零依赖（Node 标准库）。见 [docs/决策门禁对照与接入方案.md](docs/决策门禁对照与接入方案.md)。双人复核的离线演练见 [docs/双人复核离线演练.md](docs/双人复核离线演练.md)：生产幕幕与 Mimi 保持 L2，不启用 dual。
 - 开发纪律也结构化（学 pstack 的「Encode Lessons in Structure」）：`checks/lint.py --selftest` 用坏样例证明每条 lint 规则真会红（对应「新检查必须先挂真实错误」）；项目决策有 append-only 账本 [docs/decisions.md](docs/decisions.md)。见 [docs/从pstack学到的结构防线.md](docs/从pstack学到的结构防线.md)。
 - 模型可以换成你自己的账号：`model_provider` 写成 `openai_compat`，密钥放在环境变量。见 [docs/模型接口.md](docs/模型接口.md)。拿去参赛时的字段对照见 [docs/用本框架参赛.md](docs/用本框架参赛.md)。
@@ -230,6 +230,7 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `agents/CONFIG.md` | 每一项怎么填 |
 | `redact.example.txt` | 空的客户名名单样子，复制成 `redact.txt` 再用 |
 | `doctor.py` | `--doctor`：只读诊断，不发消息 |
+| `mcp_server.py` | 本地控制面。默认关。stdio 只读三件套，不监听端口。项目级接线见 [docs/本地控制面.md](docs/本地控制面.md) |
 | `observe.py` | 本机 `logs/events.jsonl` |
 | `calltrace.py` | 本机调用链 `logs/calls.jsonl`。默认开。见 [docs/调用记录.md](docs/调用记录.md) |
 | `lifecycle.py` | 单实例锁和优雅停机 |
@@ -248,6 +249,7 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `docs/断线提醒与晨报.md` | 断线提醒和早晨摘要怎么开，以及飞书要哪些权限 |
 | `docs/对外口径.md` | 官网浮层和飞书群共用的对外口径唯一来源（`voice-v2`）：能介绍哪些作品和路径、口吻、保密期不复述名字、不谈什么、怎么交接（`[[COOP]]` 出名片、`[[LEAD]]` 出「发给团队」的按钮） |
 | `docs/多入口对照与方案.md` | LangBot、AstrBot、NoneBot2 怎么做多入口，我们这套缺哪四样，对外入口会怎么坏，以及为什么先不并进程 |
+| `docs/本地控制面.md` | 只读 MCP 的启动参数、三个工具，以及仓库根 `.cursor/mcp.json` 示例。不写密钥、不写 `env` |
 | `docs/用量周报.md` | 用量周报怎么开，统计什么，什么不会写进去 |
 | `docs/调用记录.md` | 每轮调用链写在本机，主人私聊可看，周报只加合计 |
 | `docs/复盘写回.md` | 一轮做完后提议一句短复盘，确认后才写入该群记忆 |

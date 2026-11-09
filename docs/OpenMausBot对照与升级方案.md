@@ -78,7 +78,7 @@ stdio MCP server，纯标准库，独立进程，只读实例目录里的文件�
 ## v0.12.0 之后还欠什么
 
 - **线上升级**：本仓库这些改动要进实例，走的仍是 [runbook-升级与回滚.md](runbook-升级与回滚.md) 四步（前置核对 → 取代码并验收 → 放锁平滑重启 → 复核并释放锁），需要一个允许重启的窗口，由主人点头。mimi 这台停在 10-28 的 `49856d2`，仍是最该拉上来的一台。
-- **MCP server 的接线文档**：装进实例后，在实例配置旁加一段 MCP 客户端的 `mcpServers` 条目（`command: python`、`args: [mcp_server.py, agents/xxx.json]`）。v2 若加写入类工具，先抄 OpenMausBot 的配对码 + 可撤销会话那一套，并重新过安全审查——这一版没有任何写入，也就不需要任何凭据。
+- **MCP server 的接线**：项目级示例在 [本地控制面.md](本地控制面.md)（仓库根 `.cursor/mcp.json`，`command` 用本机 Python，`args` 为 `mcp_server.py` 加 `agents/<name>.json`，`cwd` 为仓库根，不写 secret、不写 `env`）。v2 若加写入类工具，先抄 OpenMausBot 的配对码 + 可撤销会话那一套，并重新过安全审查——这一版没有任何写入，也就不需要任何凭据。
 - **官网三件 patch**：与本案无关，仍在等丽丽审（见 [多入口对照与方案.md](多入口对照与方案.md) 链路验收矩阵）。
 
 > AI生成
