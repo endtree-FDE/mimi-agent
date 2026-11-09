@@ -1123,12 +1123,14 @@ def format_hits(hits, preamble, cap):
         return ""
     blocks = [_cite_body(i, h, h["text"]) for i, h in enumerate(hits, 1)]
     body = preamble + "\n\n" + "\n\n".join(blocks)
-    if not cap or len(body) <= cap:
-        return body
-    note = "\n（结果超过字数预算，已截断。）"
-    if len(note) >= cap:
-        return note[:cap]
-    return body[:cap - len(note)].rstrip() + note
+    if cap and len(body) > cap:
+        note = "\n（结果超过字数预算，已截断。）"
+        if len(note) >= cap:
+            body = note[:cap]
+        else:
+            body = body[:cap - len(note)].rstrip() + note
+    # 字数预算先作用在资料上，边界在预算之外，截断也不会把结束标记切掉。
+    return guard.frame_untrusted(body, "检索片段")
 
 
 def output_budget(cfg):

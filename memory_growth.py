@@ -375,7 +375,10 @@ def build_prompt(chat_id, facts, messages, names=()):
         "op 只能是 add、update、retire。update 和 retire 必须带已有事实的 id。\n"
         "type 只能是 person、project、decision、deadline、rule、resource、preference、status、note。\n"
         "message_ids 只能用对话里出现过的编号。没有值得记的就输出 {\"items\":[]}。\n"
-        "已有事实：\n%s\n对话：\n%s\n" % (body_facts, body_msgs)
+        "已有事实：\n%s\n对话：\n%s\n" % (
+            guard.frame_untrusted(body_facts, "已有事实"),
+            guard.frame_untrusted(body_msgs, "近期对话"),
+        )
     )
 
 

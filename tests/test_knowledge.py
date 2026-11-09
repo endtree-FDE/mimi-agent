@@ -461,8 +461,10 @@ try:
     else:
         check("没装 pypdf 时刷新不报错", st.get("ok") is True and "PAGE2BETA" not in blob, str(st))
     clipped = knowledge.search_text(limits, lcfg, "oc_limits", "正常条款", NAMES)
+    inner = clipped.split(guard.UNTRUSTED_CLOSE, 1)[0].split("\n", 1)[-1].strip("\n") if clipped else ""
     check("检索结果不超过字数预算，并标明截断",
-          clipped and len(clipped) <= 80 and "截断" in clipped, clipped)
+          clipped and len(inner) <= 80 and "截断" in inner
+          and clipped.startswith(guard.UNTRUSTED_OPEN) and clipped.rstrip().endswith(guard.UNTRUSTED_CLOSE), clipped)
     check("附件页数上限会传给收录",
           tools.attachment_limits(lcfg)["pdf_max_pages"] == 1 and tools.attachment_limits(lcfg)["max_bytes"] == 1024 * 1024)
 finally:

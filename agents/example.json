@@ -184,6 +184,8 @@
     "body_max_chars": 20000,
     "max_tool_rounds": 4,
     "tool_context_budget_chars": 120000,
+    "tool_result_max_entries": 8,
+    "tool_result_max_bytes": 393216,
     "reply_chunk_chars": 3500,
     "acp_max_sessions": 8,
     "acp_idle_sec": 1800,
