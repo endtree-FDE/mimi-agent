@@ -20,7 +20,7 @@ import confirm_mode, feature_switch
 from channels.base import Cap, can_update, status_modes
 from channels.feishu import MEMBER_ADDED, MEMBER_DELETED
 from providers.base import PartialText
-from tools import Tools, ToolError, TOOL_DOC, MEMORY_TOOL_DOC, READ_TOOLS, WRITE_TOOLS, run_capture, parse_cli_json, clip_body, message_text, attachment_limits, inspect_download, disk_download_name, kb_catalog, history_page_size, sweep_old
+from tools import Tools, ToolError, ToolTimeout, TOOL_DOC, MEMORY_TOOL_DOC, READ_TOOLS, WRITE_TOOLS, run_capture, parse_cli_json, clip_body, message_text, attachment_limits, inspect_download, disk_download_name, kb_catalog, history_page_size, sweep_old
 
 CFG_PATH = sys.argv[1]; ARGS = sys.argv[2:]
 def _opt(name):
@@ -1065,6 +1065,14 @@ def _trace_tool(ctx, name, args, ok, elapsed, result):
         CALLS.tool((ctx or {}).get("message_id") or "", name, ok, elapsed, result, skill=skill)
     except Exception:
         log.warning("call trace tool failed")
+def _stop_for_timeout(ctx, name, args, exc, started):
+    """超时就停在这一句上，不再叫模型，也不再跑后面的工具。日志只有原因码。"""
+    if isinstance(ctx, dict): ctx["_tool_timeout"] = exc.code
+    safe = re.sub(r"[^a-z0-9_]", "", str(name or ""))[:40] or "unknown"
+    log.info("tool timeout code=%s tier=%s tool=%s", exc.code, exc.tier, safe)
+    _note_tool(ctx, name, False, exc.detail, exc.user_msg, started)
+    _trace_tool(ctx, name, args, False, time.time() - started, exc.user_msg)
+    return exc.user_msg, True
 def _run_tool(name, args, ctx, on_stage):
     """返回 (text, done)。done 为真时，text 就是给用户的最终回复（确认码或拒绝）。"""
     log.info("tool call %s %s", name, guard.redact(json.dumps(args, ensure_ascii=False), REDACT_NAMES)[:200])
@@ -1085,6 +1093,9 @@ def _run_tool(name, args, ctx, on_stage):
             _note_tool(ctx, name, True, "", "", started)
             _trace_tool(ctx, name, args, True, time.time() - started, text)
             return text, True
+        except ToolTimeout as e:
+            TOOLS.take_confirm_card()
+            return _stop_for_timeout(ctx, name, args, e, started)
         except ToolError as e:
             TOOLS.take_confirm_card()
             _note_tool(ctx, name, False, e.detail, e.user_msg, started)
@@ -1097,12 +1108,17 @@ def _run_tool(name, args, ctx, on_stage):
             _note_tool(ctx, name, True, "", "", started)
             _trace_tool(ctx, name, args, True, time.time() - started, text)
             return text, True
+        except ToolTimeout as e:
+            TOOLS.take_confirm_card()
+            return _stop_for_timeout(ctx, name, args, e, started)
         except ToolError as e:
             TOOLS.take_confirm_card()
             _note_tool(ctx, name, False, e.detail, e.user_msg, started)
             _trace_tool(ctx, name, args, False, time.time() - started, e.user_msg)
             return guard.redact(e.user_msg, REDACT_NAMES), True
     try: res = TOOLS.run_read(name, args, ctx)
+    except ToolTimeout as e:
+        return _stop_for_timeout(ctx, name, args, e, started)
     except ToolError as e:
         log.info("tool %s degraded: %s %s", name, guard.redact(e.user_msg, REDACT_NAMES), guard.redact(e.detail[:200], REDACT_NAMES))
         _note_tool(ctx, name, False, e.detail, e.user_msg, started)
@@ -1984,6 +2000,11 @@ def _handle_claimed(ev, mid, ctype, uid):
         try:
             if targets and FEAT.get("attachments"):
                 try: extra, cleanup = _load_context(targets, ctx, mid)
+                except ToolTimeout as e:
+                    ctx["_tool_timeout"] = e.code
+                    ctx["_tool_timeout_text"] = e.user_msg
+                    log.info("tool timeout code=%s tier=%s tool=attachment", e.code, e.tier)
+                    _note_tool(ctx, "attachment", False, e.detail, e.user_msg, t0)
                 except ToolError as e:
                     log.info("attachment degraded: %s %s", e.user_msg, guard.redact(e.detail[:200], REDACT_NAMES))
                     extra = "（附件读取失败：%s。请如实告诉提问者。）" % e.user_msg
@@ -2002,7 +2023,11 @@ def _handle_claimed(ev, mid, ctype, uid):
                     try: lifecycle.touch(STATE, mid, stage, REDACT_NAMES)
                     except Exception: pass
             q_model = clip_question(q)
-            a = answer(q_model, sess, ctx, extra, on_stage=hook)
+            # 附件已经超时就直接把那一句交回去，不再调用模型，避免模型等待把名额继续占着。
+            if ctx.get("_tool_timeout"):
+                a = ctx.get("_tool_timeout_text") or ""
+            else:
+                a = answer(q_model, sess, ctx, extra, on_stage=hook)
         except Exception as e:
             log.error("handle error: %s: %s", type(e).__name__, guard.redact(str(e), REDACT_NAMES)[:300]); a = None
             low = str(e).lower()
@@ -2012,21 +2037,24 @@ def _handle_claimed(ev, mid, ctype, uid):
             if cleanup: cleanup()
         log.info("agent done %s elapsed=%.1fs ok=%s partial=%s", mid, time.time() - t0, bool(a), isinstance(a, PartialText))
     partial = isinstance(a, PartialText)
+    timed_out = bool(ctx.get("_tool_timeout"))
     if a and guard.policy_hit(a, POLICY_OUT):
         a2, _ = guard.drop_policy_paragraphs(a, POLICY_OUT); a = a2 or ("" if partial else (CFG["texts"].get("policy_refuse") or CFG["texts"].get("taboo") or "这个话题我不参与讨论。"))
     if partial:
         if a: a = str(a) + "\n\n" + CFG["texts"].get("partial_note", "（时间到了，先给部分结果）")
         else: a = CFG["texts"].get("stall", "这题比较复杂，没在时间内答完，可以拆成更小的问题再问我。")
-    elif a: remember(sess, "user", guard.neutralize(guard.redact(q_model, REDACT_NAMES))); remember(sess, "bot", guard.neutralize(a if isinstance(a, str) else str(a)))
+    elif a and not timed_out: remember(sess, "user", guard.neutralize(guard.redact(q_model, REDACT_NAMES))); remember(sess, "bot", guard.neutralize(a if isinstance(a, str) else str(a)))
     final = _with_late(a or CFG["texts"]["fail"])
+    # 超时也把那一句发给用户，但指标不算成功，避免把失败记成一次正常回答。
+    metric_ok = bool(a) and not timed_out
     log.info("metric kind=answer chat=%s limited=%d in_chars=%d out_chars=%d elapsed=%.1fs ok=%d partial=%d",
              "p2p" if ctype == "p2p" else "group", 1 if ctx.get("limited") else 0,
-             len(q_model or ""), len(final or ""), time.time() - t0, 1 if a else 0, 1 if partial else 0)
-    try: OBS.finish(mid, bool(a), time.time() - t0, traffic=usage.current_traffic())
+             len(q_model or ""), len(final or ""), time.time() - t0, 1 if metric_ok else 0, 1 if partial else 0)
+    try: OBS.finish(mid, metric_ok, time.time() - t0, traffic=usage.current_traffic())
     except Exception: log.warning("observe answer failed %s", mid)
     traced_row = None
     try:
-        traced_row = CALLS.finish(mid, bool(a), time.time() - t0, final if isinstance(final, str) else "",
+        traced_row = CALLS.finish(mid, metric_ok, time.time() - t0, final if isinstance(final, str) else "",
                                    traffic=usage.current_traffic())
     except Exception: log.warning("call trace finish failed %s", mid)
     issued = []
@@ -2036,15 +2064,15 @@ def _handle_claimed(ev, mid, ctype, uid):
     try:
         skill_evolve.observe(CFG, BASE, traced_row, REDACT_NAMES, [item.get("content") or "" for item in issued if isinstance(item, dict)])
     except Exception: log.warning("skill evolve note failed %s", mid)
-    _usage_turn(ev.get("chat_id"), ctype, bool(a) and not partial, q_topic, q_hits,
+    _usage_turn(ev.get("chat_id"), ctype, bool(a) and not partial and not timed_out, q_topic, q_hits,
                 elapsed_ms=int((time.time() - t0) * 1000), partial=partial)
-    if partial:
+    if partial or timed_out:
         try: usage.note_error("timeout", ev.get("chat_id"), ctype)
         except Exception: log.warning("usage error note failed")
     elif not a:
         try: usage.note_error(err_kind or "model", ev.get("chat_id"), ctype)
         except Exception: log.warning("usage error note failed")
-    write_journal("answer", chat="p2p" if ctype == "p2p" else "group", ok=bool(a), partial=partial,
+    write_journal("answer", chat="p2p" if ctype == "p2p" else "group", ok=metric_ok, partial=partial,
                   limited=ctx.get("limited"), in_chars=len(q_model or ""), out_chars=len(final or ""),
                   elapsed_ms=int((time.time() - t0) * 1000), tools=ctx.get("_tools") or [])
     try: _send_confirm_card(mid, ctx)

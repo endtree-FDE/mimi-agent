@@ -1,10 +1,11 @@
 # 工具层：只允许白名单内的 lark-cli 命令，统一 --as bot；写操作要确认；全部写审计日志；缺权限优雅降级。
 import json, os, re, sqlite3, subprocess, struct, tempfile, time, random, threading, datetime, glob, shutil, zipfile
-import confirm_mode, guard, skills, usage
+import confirm_mode, guard, skills, tool_timeout, usage
 from channels.base import TOOL_CAPS
 
-def run_capture(cmd, cwd=None, timeout=60):
-    """代替 subprocess.run：超时杀整棵进程树（Windows 上只杀父进程时孙进程仍占着管道，communicate 会一直卡住）"""
+def run_capture(cmd, cwd=None, timeout=60, reap=15):
+    """代替 subprocess.run：超时杀整棵进程树（Windows 上只杀父进程时孙进程仍占着管道，communicate 会一直卡住）。
+    reap 是杀掉之后再收管道的秒数。默认 15，和原来一样；工具档位打开时改短，免得收尸把处理线程再拖住。"""
     p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          text=True, encoding="utf-8", errors="replace")
     try:
@@ -12,7 +13,7 @@ def run_capture(cmd, cwd=None, timeout=60):
     except subprocess.TimeoutExpired:
         if os.name == "nt": subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
         else: p.kill()
-        try: out, err = p.communicate(timeout=15)
+        try: out, err = p.communicate(timeout=reap)
         except Exception: out, err = "", ""
         raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
     return subprocess.CompletedProcess(cmd, p.returncode, out, err)
@@ -31,6 +32,14 @@ def _actor_ok(ctx):
 class ToolError(Exception):
     def __init__(self, user_msg, detail=""):
         super().__init__(user_msg); self.user_msg = user_msg; self.detail = detail
+
+class ToolTimeout(ToolError):
+    """这一次命令超过档位时限。detail 只有原因码，不带参数、路径或编号。"""
+    def __init__(self, tier):
+        spec = tool_timeout.pack(tier)
+        self.tier = spec["tier"]
+        self.code = spec["code"]
+        super().__init__(spec["user_msg"], spec["detail"])
 
 SCOPE_HINT = {
     "history": "im:message.group_msg（群消息读取）", "docs_read": "docx:document:readonly",
@@ -417,6 +426,23 @@ class Tools:
         except Exception:
             self.log.warning("usage audit note failed")
 
+    def _log_timeout(self, tool):
+        """只记原因码和工具名。命令行里可能有文档编号，不写进这行。"""
+        tier = tool_timeout.tier_of(tool)
+        safe = re.sub(r"[^a-z0-9_]", "", str(tool or ""))[:40] or "unknown"
+        self.log.warning("tool timeout code=%s tier=%s tool=%s", tool_timeout.REASON[tier], tier, safe)
+
+    def _bounded(self, tool, cmd, cwd=None, timeout=60):
+        """子进程按档位限时。开关关着时仍用调用点传入的秒数，超时仍是 TimeoutExpired。"""
+        limit = tool_timeout.limit_for(self.cfg, tool, timeout)
+        try:
+            return run_capture(cmd, cwd=cwd or self.base, timeout=limit, reap=tool_timeout.reap_sec(self.cfg))
+        except subprocess.TimeoutExpired:
+            if tool_timeout.enabled(self.cfg):
+                self._log_timeout(tool)
+                raise ToolTimeout(tool_timeout.tier_of(tool))
+            raise
+
     def lark(self, tool, argv, cwd=None, timeout=60):
         argv = list(argv) + ["--profile", self.cfg["profile"], "--as", "bot"]
         if self.lark_exe()[0].lower().endswith((".cmd", ".bat")) and any(_CMD_UNSAFE.search(str(x)) for x in argv):
@@ -450,11 +476,18 @@ class Tools:
             # 回归测试专用。变量不存在时仍走原来的 lark-cli。这里拒绝真正去连飞书。
             raise ToolError("回归测试不会调用飞书", "eval blocked lark")
         else:
+            # 档位开着时超时不再重试。三次重试会把一次等待乘上三，并发名额被占满后新问题排不进去。
+            limit = tool_timeout.limit_for(self.cfg, tool, timeout)
+            reap = tool_timeout.reap_sec(self.cfg)
+            tiered = tool_timeout.enabled(self.cfg)
             for attempt in range(3):
                 try:
-                    r = run_capture(self.lark_exe() + argv, cwd=cwd or self.base, timeout=timeout)
+                    r = run_capture(self.lark_exe() + argv, cwd=cwd or self.base, timeout=limit, reap=reap)
                     out = (r.stdout or "").strip(); err = r.stderr or ""
                 except subprocess.TimeoutExpired:
+                    if tiered:
+                        self._log_timeout(tool)
+                        raise ToolTimeout(tool_timeout.tier_of(tool))
                     out, err = "", "timeout"
                 j = parse_cli_json(out, err)
                 if not j: j = {"ok": False, "error": {"message": ((out or "")[:200] + " | " + (err or "")[-300:]).strip(" |")}}
@@ -480,7 +513,10 @@ class Tools:
             ctx["_file_types"] = []
         try: res = call(args or {}, ctx)
         except ToolError as e:
-            self.audit(kind="read", tool=name, user=ctx["user"], chat=ctx["chat_id"], ok=False, err=e.user_msg, count_usage=False); raise
+            fields = {"kind": "read", "tool": name, "user": ctx["user"], "chat": ctx["chat_id"], "ok": False,
+                      "err": e.user_msg, "count_usage": False}
+            if isinstance(e, ToolTimeout): fields["detail"] = e.detail
+            self.audit(**fields); raise
         types = list(ctx.get("_file_types") or []) if isinstance(ctx, dict) else []
         fields = {"kind": "read", "tool": name, "user": ctx["user"], "chat": ctx["chat_id"], "ok": True,
                   "file_types": types, "scope": (ctx or {}).get("chat_type")}
@@ -495,11 +531,35 @@ class Tools:
         try: return self.skills.read((a or {}).get("name"))
         except skills.SkillError as e: raise ToolError(str(e))
 
+    def _search_cfg(self):
+        """档位打开时，搜索等待不超过读档。不改配置里原来的 search.timeout_sec。"""
+        cfg = self.cfg
+        if not tool_timeout.enabled(cfg):
+            return cfg
+        cap = tool_timeout.settings(cfg)["read_sec"]
+        raw = cfg.get("search") if isinstance(cfg.get("search"), dict) else {}
+        try:
+            current = float(raw.get("timeout_sec"))
+        except (TypeError, ValueError):
+            current = 20
+        if current <= cap:
+            return cfg
+        copied = dict(cfg)
+        search = dict(raw)
+        search["timeout_sec"] = cap
+        copied["search"] = search
+        return copied
+
     def _web_search(self, a, ctx):
         """没有自带联网的模型用这个查公开网页。默认关。密钥不进日志。"""
         import search_backend
         try:
-            return search_backend.run(self.cfg, a or {}, self.names)
+            return search_backend.run(self._search_cfg(), a or {}, self.names)
+        except search_backend.SearchTimeout:
+            if tool_timeout.enabled(self.cfg):
+                self._log_timeout("web_search")
+                raise ToolTimeout("read")
+            raise ToolError("搜索请求失败")
         except search_backend.SearchError as e:
             raise ToolError(e.user_msg)
 
@@ -564,7 +624,7 @@ class Tools:
                     f.write(cand)
             else:
                 raise ToolError("给出候选输出的 path（实例内相对路径）或 candidate 内容")
-            r = run_capture([node, script, "--candidate", cand_file, "--schema", schema_path], cwd=self.base, timeout=60)
+            r = self._bounded("evidencegate_check", [node, script, "--candidate", cand_file, "--schema", schema_path], cwd=self.base, timeout=60)
             out = (r.stdout or "").strip()
             if r.returncode != 0 or not out:
                 raise ToolError("门禁脚本执行失败（exit %s）" % r.returncode)
@@ -596,7 +656,7 @@ class Tools:
         script = os.path.join(self.base, "skills", "juchang-decision-gate", "scripts", "run-decision-gate.mjs")
         if not os.path.isfile(script):
             raise ToolError("决策门禁脚本缺失（skills/juchang-decision-gate/scripts/）")
-        r = run_capture([node or self._dg_node(), script, "--input", payload_file], cwd=self.base, timeout=60)
+        r = self._bounded("decision_gate_check", [node or self._dg_node(), script, "--input", payload_file], cwd=self.base, timeout=60)
         out = (r.stdout or "").strip()
         if r.returncode != 0 or not out:
             err = (r.stderr or "").strip()
@@ -652,7 +712,7 @@ class Tools:
         p = guard.safe_path(self.base, rel)
         if not p or not os.path.isfile(p):
             raise ToolError("回放文件不存在或不在实例目录内")
-        r = run_capture([node, script, p], cwd=self.base, timeout=60)
+        r = self._bounded("evidence_replay_check", [node, script, p], cwd=self.base, timeout=60)
         if r.returncode == 2:
             raise ToolError("回放核对脚本用法错误")
         out = (r.stdout or "").strip()
@@ -677,7 +737,7 @@ class Tools:
         p = guard.safe_path(self.base, rel)
         if not p or not os.path.isfile(p):
             raise ToolError("回执导出文件不存在或不在实例目录内")
-        r = run_capture([node, script, "--input", p], cwd=self.base, timeout=60)
+        r = self._bounded("receipt_verify", [node, script, "--input", p], cwd=self.base, timeout=60)
         out = (r.stdout or "").strip()
         if r.returncode == 2:
             raise ToolError("回执核验输入文件读不了或不是合法 JSON")
@@ -1443,6 +1503,11 @@ class Tools:
                 d = j.get("data") or {}
                 link = d.get("url") or d.get("doc" + "_url") or (d.get("document") or {}).get("url") or d.get("app_link") or ""
                 if link: links.append(link)
+        except ToolTimeout as e:
+            # 命令没在档位里跑完。这不是确认码过期，不走 _expire_pending，也不改 confirm_ttl。
+            self.audit(kind="write_failed", tool=p["tool"], user=ctx["user"], code=code, token=p.get("token") or "", err=e.user_msg, detail=e.detail)
+            if done: return "已完成 %d/%d 步。后面的停在超时上，没有继续改。" % (done, len(steps))
+            return e.user_msg
         except ToolError as e:
             self.audit(kind="write_failed", tool=p["tool"], user=ctx["user"], code=code, token=p.get("token") or "", err=e.user_msg, detail=e.detail[:300])
             if done: return "已完成 %d/%d 步。后面的失败了：%s" % (done, len(steps), e.user_msg)
@@ -1457,7 +1522,13 @@ class Tools:
     def fetch_attachments(self, message_id, ctx, tmp_root, must_enable=True, count_usage=True):
         if must_enable and not self.enabled("attachment"): raise ToolError("图片和文件识别还没在配置里启用")
         d = os.path.join(tmp_root, "att_" + re.sub(r"\W", "", message_id)[-20:]); os.makedirs(d, exist_ok=True)
-        j = self._transport("attachment", ["im", "+messages-mget", "--message-ids", message_id, "--download-resources", "--no-reactions"], cwd=d, timeout=120)
+        try:
+            j = self._transport("attachment", ["im", "+messages-mget", "--message-ids", message_id, "--download-resources", "--no-reactions"], cwd=d, timeout=120)
+        except ToolTimeout as e:
+            shutil.rmtree(d, ignore_errors=True)
+            self.audit(kind="read", tool="attachment", user=ctx["user"], chat=ctx["chat_id"], ok=False,
+                       err=e.user_msg, detail=e.detail, count_usage=False)
+            raise
         files = []
         root_r = os.path.realpath(d)
         for p in glob.glob(os.path.join(d, "lark-im-resources", "**", "*"), recursive=True):

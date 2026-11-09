@@ -755,6 +755,35 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "timeouts": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "工具调用超时档位。enabled 不是 true 时不生效，各调用仍用原来的秒数。与确认时效无关。",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "不写或 false 时保持原来的超时和重试。true 才按读/写/长三档限时，超时不重试。"
+            },
+            "read_sec": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 60,
+              "description": "只读工具一次命令最多等几秒。不写是 20。越界退回 20。"
+            },
+            "write_sec": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 120,
+              "description": "确认之后真正写入时，一次命令最多等几秒。不写是 45。越界退回 45。不是确认码的有效期。"
+            },
+            "long_sec": {
+              "type": "integer",
+              "minimum": 30,
+              "maximum": 180,
+              "description": "附件下载和门禁脚本最多等几秒。不写是 120。越界退回 120。"
+            }
+          }
+        },
         "history": {
           "type": "object",
           "additionalProperties": true,

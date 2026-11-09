@@ -557,6 +557,11 @@ _ex_sk = _ex_cfg.get("skills") or {}
 check("配置示例的技能开关仍是关闭，only 仍是空数组",
       _ex_sk.get("enabled") is False and _ex_sk.get("only") == [] and _ex_sk.get("index_budget_chars") == 900,
       str(_ex_sk))
+_ex_to = (_ex_cfg.get("tools") or {}).get("timeouts") or {}
+check("配置示例的工具超时档位默认关，不改确认时效",
+      _ex_to.get("enabled") is False and _ex_to.get("read_sec") == 20 and _ex_to.get("write_sec") == 45
+      and _ex_to.get("long_sec") == 120 and (_ex_cfg.get("write") or {}).get("confirm_ttl_sec") == 300,
+      str(_ex_to))
 _inline, _ibody, _ierr = _sk.parse_skill('---\nname: demo-skill\ndescription: 演示触发词。\ntriggers: ["进度表", 纪要]\n---\n\n步骤。\n')
 _block, _bbody, _berr = _sk.parse_skill("---\nname: demo-skill\ndescription: 演示触发词。\ntriggers:\n  - 进度表\n  - 纪要\n---\n\n步骤。\n")
 check("triggers：一行列表和缩进列表都能解析",
@@ -2772,6 +2777,9 @@ results.append(("私聊开关功能", _sw.returncode == 0))
 print("\n-- confirm --", flush=True)
 _cf = _run([sys.executable, os.path.join(FW, "tests", "test_confirm.py")], cwd=FW)
 results.append(("写入确认方式", _cf.returncode == 0))
+print("\n-- tool timeout --", flush=True)
+_tt = _run([sys.executable, os.path.join(FW, "tests", "test_tool_timeout.py")], cwd=FW, timeout=120)
+results.append(("工具超时档位", _tt.returncode == 0))
 print("\n-- setup wizard --", flush=True)
 _wz = _run([sys.executable, os.path.join(FW, "tests", "test_setup_wizard.py")], cwd=FW)
 results.append(("一键安装向导", _wz.returncode == 0))
