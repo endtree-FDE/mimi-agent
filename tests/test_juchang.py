@@ -393,7 +393,11 @@ def test_statics():
     check("示例里三个工具默认关", all((et.get(n) or {}).get("enabled") is False
           for n in ("decision_gate_check", "evidence_replay_check", "receipt_verify")), et)
     dg = (EXAMPLE.get("write") or {}).get("decision_gate") or {}
-    check("示例里写提案门禁默认关且带等级声明", dg.get("enabled") is False and dg.get("tools", {}).get("docs_create") == "L2", dg)
+    check("示例里写提案门禁默认关，试运行只声明 docs_create 与 base_create 为 L2",
+          dg.get("enabled") is False
+          and dg.get("tools") == {"docs_create": "L2", "base_create": "L2"}
+          and dg.get("evidence_window_sec") == 900
+          and dg.get("evidence_default") == "sufficient", dg)
 
 
 # ---------- ⑧ 零写入冻结导出器 + 端到端复检（生产配置） ----------

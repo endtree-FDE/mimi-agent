@@ -296,8 +296,6 @@
       "enabled": false,
       "tools": {
         "docs_create": "L2",
-        "docs_append": "L2",
-        "calendar_create": "L2",
         "base_create": "L2"
       },
       "evidence_window_sec": 900,
