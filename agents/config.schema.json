@@ -744,6 +744,53 @@
               "description": "Node 可执行文件名或路径。不写用 node（或 tools.decision_gate_check.node）。"
             }
           }
+        },
+        "review_roster": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "双人复核值班表。默认关。enabled 不是 true 时，第二位仍是任意另一位写入白名单管理员。打开后只能收窄到当前班次，且值班人还必须在 allowed_users 里。不把日常 L2 抬成 dual，也不关确认。",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "utc_offset_hours": {
+              "type": "integer",
+              "minimum": -12,
+              "maximum": 14,
+              "description": "相对 UTC 的小时数。不写用运行机器人的那台电脑的本地时间。东八区写 8。写错时这一时段没有人能复核。"
+            },
+            "slots": {
+              "type": "array",
+              "description": "班次。weekdays 用 1 到 7（1 是周一）。start 含、end 不含；end 可以是 24:00。end 早于 start 表示跨过午夜，早晨算前一天。",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "weekdays": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 7
+                    }
+                  },
+                  "start": {
+                    "type": "string"
+                  },
+                  "end": {
+                    "type": "string"
+                  },
+                  "open_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "这一班可以复核的人的编号。必须同时出现在 write.allowed_users 的左边。"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

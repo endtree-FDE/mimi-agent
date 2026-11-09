@@ -301,6 +301,24 @@
       "evidence_window_sec": 900,
       "evidence_default": "sufficient"
     },
+    "review_roster": {
+      "enabled": false,
+      "utc_offset_hours": 8,
+      "slots": [
+        {
+          "weekdays": [1, 2, 3, 4, 5],
+          "start": "09:00",
+          "end": "18:00",
+          "open_ids": ["ou_placeholderreviewa"]
+        },
+        {
+          "weekdays": [1, 2, 3, 4, 5],
+          "start": "18:00",
+          "end": "09:00",
+          "open_ids": ["ou_placeholderreviewb"]
+        }
+      ]
+    },
     "allowed_users": {
       "REPLACE_USER_OPEN_ID": "小李"
     },
