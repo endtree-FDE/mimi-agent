@@ -7,15 +7,47 @@ import sys, os, json, zipfile, hashlib, shutil, datetime, subprocess, re
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import utf8io  # noqa: F401
 import guard
-CFG = json.load(open(sys.argv[1], encoding="utf-8-sig")); A = sys.argv[2:]
-BASE = os.path.abspath(CFG.get("base_dir") or os.path.dirname(os.path.abspath(sys.argv[1])))
-KB = os.path.join(BASE, CFG.get("kb_dir", "kb")); INBOX = os.path.join(BASE, "kb_inbox"); STG = os.path.join(BASE, "kb_staging")
-NAMES = guard.load_names(os.path.join(BASE, CFG.get("redact_file", "redact.txt"))); TODAY = datetime.date.today().strftime("%Y%m%d")
-for d in (INBOX, STG): os.makedirs(d, exist_ok=True)
-def lark_exe(): return [os.path.join(os.environ["APPDATA"], "npm", "lark-cli.cmd")] if os.name == "nt" else ["lark-cli"]
-def put(dst_root, rel, text, rep):
-    cands = guard.candidate_names(text); text, dropped = guard.drop_policy_paragraphs(text, guard.policy_rules(CFG, "kb"))
-    text = guard.redact(text, NAMES)
+
+def lark_exe(platform=None, appdata=None, isfile=None):
+    """和 agentbot.lark_exe 同一顺序：Windows 先找原生 exe，没有才退回 lark-cli.cmd。
+    直接调 exe 是为了不经过 cmd.exe。参数里的 " & | % 在 .cmd 里会被当成命令。"""
+    plat = os.name if platform is None else platform
+    if plat != "nt":
+        return ["lark-cli"]
+    root = os.environ.get("APPDATA", "") if appdata is None else appdata
+    exe = os.path.join(root, "npm", "node_modules", "@larksuite", "cli", "bin", "lark-cli.exe")
+    exists = os.path.isfile if isfile is None else isfile
+    try:
+        found = bool(exists(exe))
+    except OSError:
+        found = False
+    if found:
+        return [exe]
+    return [os.path.join(root, "npm", "lark-cli.cmd")]
+
+def lark_fetch_argv(profile, token, exe=None):
+    """参数是列表，不拼进 shell。token 原样占一个参数。"""
+    cmd = list(exe) if exe is not None else lark_exe()
+    return cmd + ["docs", "+fetch", "--doc", str(token), "--doc-format", "markdown",
+                  "--profile", str(profile), "--as", "bot"]
+
+def lark_argv_rejected(argv):
+    """走 .cmd/.bat 时拒绝会被 cmd.exe 当成命令的字符。exe 不经过 cmd，不拦。"""
+    if not argv:
+        return True
+    head = str(argv[0]).lower()
+    if not head.endswith((".cmd", ".bat")):
+        return False
+    from tools import _CMD_UNSAFE
+    return any(_CMD_UNSAFE.search(str(x)) for x in argv)
+
+def put(dst_root, rel, text, rep, cfg=None, names=None):
+    if cfg is None:
+        cfg = CFG
+    if names is None:
+        names = NAMES
+    cands = guard.candidate_names(text); text, dropped = guard.drop_policy_paragraphs(text, guard.policy_rules(cfg, "kb"))
+    text = guard.redact(text, names)
     p = guard.safe_path(dst_root, rel)
     if not p:
         rep.append("- 跳过可疑路径 " + str(rel)); return set()
@@ -57,44 +89,76 @@ def diff_list(dst):
             elif open(old, "rb").read() != open(os.path.join(root, f), "rb").read(): lines.append("- 更新 " + rel)
     return "\n".join(lines) or "- 无变化"
 
-if "--inbox" in A:
-    dst = os.path.join(STG, TODAY); rep, cands = [], set(); n = 0
-    for z in sorted(f for f in os.listdir(INBOX) if f.endswith(".zip")):
-        zp = os.path.join(INBOX, z)
-        with zipfile.ZipFile(zp) as zf:
-            man = json.loads(zf.read("MANIFEST.json"))
-            for rel, sha in man["files"].items():
-                if guard.safe_path(dst, rel) is None: rep.append("- 跳过可疑路径 " + rel); continue
-                b = _zip_member(zf, rel)
-                if b is None: rep.append("- 跳过过大或压缩异常 " + str(rel)); continue
-                if hashlib.sha256(b).hexdigest() != sha: rep.append("- 校验失败 " + rel); continue
-                cands |= put(dst, rel, b.decode("utf-8", "replace"), rep); n += 1
-        os.makedirs(os.path.join(INBOX, "done"), exist_ok=True); shutil.move(zp, os.path.join(INBOX, "done", z))
-    if n: write_report(dst, rep, cands, "收件箱导入 %d 个文件\n\n### 与正式 kb 的差异\n%s\n" % (n, diff_list(dst)))
-    print("inbox ->", dst if n else "(无新包)", n)
-
-if "--pull-docs" in A:
-    dst = os.path.join(STG, TODAY); rep, cands = [], set(); n = 0
-    for tok in CFG.get("kb_sync", {}).get("docs_tokens", []):
-        r = subprocess.run(lark_exe() + ["docs", "+fetch", "--doc", tok, "--doc-format", "markdown", "--profile", CFG["profile"], "--as", "bot"],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
-        try: j = json.loads(r.stdout[r.stdout.find("{"):])
-        except Exception: j = {"ok": False, "error": {"message": (r.stdout + r.stderr)[:200]}}
+def pull_docs(cfg, base, names, run=None, exe=None, today=None):
+    """把 kb_sync.docs_tokens 拉进待审区。危险参数不启动子进程，原因写进报告，不回显参数。"""
+    day = today or datetime.date.today().strftime("%Y%m%d")
+    dst = os.path.join(base, "kb_staging", day)
+    os.makedirs(dst, exist_ok=True)
+    rep, cands = [], set(); n = 0
+    profile = str((cfg or {}).get("profile") or "")
+    tokens = ((cfg or {}).get("kb_sync") or {}).get("docs_tokens") or []
+    runner = run or subprocess.run
+    for tok in tokens:
+        argv = lark_fetch_argv(profile, tok, exe)
+        if lark_argv_rejected(argv):
+            rep.append("- 拉取失败：参数含有不安全字符，已拒绝执行")
+            continue
+        try:
+            r = runner(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        except Exception as exc:
+            rep.append("- 拉取失败 %s：%s" % (tok, type(exc).__name__))
+            continue
+        out = getattr(r, "stdout", "") or ""; err = getattr(r, "stderr", "") or ""
+        try: j = json.loads(out[out.find("{"):])
+        except Exception: j = {"ok": False, "error": {"message": (out + err)[:200]}}
         if not j.get("ok"): rep.append("- 拉取失败 %s：%s" % (tok, str((j.get("error") or {}).get("message"))[:120])); continue
         d = j.get("data") or {}; title = re.sub(r'[\\/:*?"<>|]', "_", str(d.get("title") or tok))[:60]
-        cands |= put(dst, "feishu_docs/%s.md" % title, d.get("markdown") or d.get("content") or "", rep); n += 1
-    write_report(dst, rep, cands, "飞书文档拉取 %d 份" % n); print("pull-docs ->", dst, n)
+        cands |= put(dst, "feishu_docs/%s.md" % title, d.get("markdown") or d.get("content") or "", rep, cfg, names); n += 1
+    write_report(dst, rep, cands, "飞书文档拉取 %d 份" % n)
+    return dst, n
 
-if "--apply" in A:
-    stamp = A[A.index("--apply") + 1]; src = os.path.join(STG, stamp); assert os.path.isdir(src), src
-    new = KB + "_new"; shutil.rmtree(new, ignore_errors=True); shutil.copytree(KB, new, ignore=shutil.ignore_patterns(".attach"))
-    for root, _, fs in os.walk(src):
-        for f in fs:
-            if f.startswith("_"): continue
-            rel = os.path.relpath(os.path.join(root, f), src)
-            dest = guard.safe_path(new, rel)
-            if not dest: print("skip", rel); continue
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            shutil.copy2(os.path.join(root, f), dest)
-    prev = KB + "_prev"; shutil.rmtree(prev, ignore_errors=True); os.rename(KB, prev); os.rename(new, KB)
-    print("applied", stamp, "-> kb（旧版本在 kb_prev）")
+def main(argv=None):
+    global CFG, A, BASE, KB, INBOX, STG, NAMES, TODAY
+    argv = list(sys.argv if argv is None else argv)
+    CFG = json.load(open(argv[1], encoding="utf-8-sig")); A = argv[2:]
+    BASE = os.path.abspath(CFG.get("base_dir") or os.path.dirname(os.path.abspath(argv[1])))
+    KB = os.path.join(BASE, CFG.get("kb_dir", "kb")); INBOX = os.path.join(BASE, "kb_inbox"); STG = os.path.join(BASE, "kb_staging")
+    NAMES = guard.load_names(os.path.join(BASE, CFG.get("redact_file", "redact.txt"))); TODAY = datetime.date.today().strftime("%Y%m%d")
+    for d in (INBOX, STG): os.makedirs(d, exist_ok=True)
+
+    if "--inbox" in A:
+        dst = os.path.join(STG, TODAY); rep, cands = [], set(); n = 0
+        for z in sorted(f for f in os.listdir(INBOX) if f.endswith(".zip")):
+            zp = os.path.join(INBOX, z)
+            with zipfile.ZipFile(zp) as zf:
+                man = json.loads(zf.read("MANIFEST.json"))
+                for rel, sha in man["files"].items():
+                    if guard.safe_path(dst, rel) is None: rep.append("- 跳过可疑路径 " + rel); continue
+                    b = _zip_member(zf, rel)
+                    if b is None: rep.append("- 跳过过大或压缩异常 " + str(rel)); continue
+                    if hashlib.sha256(b).hexdigest() != sha: rep.append("- 校验失败 " + rel); continue
+                    cands |= put(dst, rel, b.decode("utf-8", "replace"), rep); n += 1
+            os.makedirs(os.path.join(INBOX, "done"), exist_ok=True); shutil.move(zp, os.path.join(INBOX, "done", z))
+        if n: write_report(dst, rep, cands, "收件箱导入 %d 个文件\n\n### 与正式 kb 的差异\n%s\n" % (n, diff_list(dst)))
+        print("inbox ->", dst if n else "(无新包)", n)
+
+    if "--pull-docs" in A:
+        dst, n = pull_docs(CFG, BASE, NAMES)
+        print("pull-docs ->", dst, n)
+
+    if "--apply" in A:
+        stamp = A[A.index("--apply") + 1]; src = os.path.join(STG, stamp); assert os.path.isdir(src), src
+        new = KB + "_new"; shutil.rmtree(new, ignore_errors=True); shutil.copytree(KB, new, ignore=shutil.ignore_patterns(".attach"))
+        for root, _, fs in os.walk(src):
+            for f in fs:
+                if f.startswith("_"): continue
+                rel = os.path.relpath(os.path.join(root, f), src)
+                dest = guard.safe_path(new, rel)
+                if not dest: print("skip", rel); continue
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.copy2(os.path.join(root, f), dest)
+        prev = KB + "_prev"; shutil.rmtree(prev, ignore_errors=True); os.rename(KB, prev); os.rename(new, KB)
+        print("applied", stamp, "-> kb（旧版本在 kb_prev）")
+
+if __name__ == "__main__":
+    main()

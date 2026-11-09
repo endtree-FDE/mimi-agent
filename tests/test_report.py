@@ -192,17 +192,62 @@ try:
         shutil.copy(FIX, os.path.join(fail_dir, "logs", "usage.jsonl"))
         mode = {"value": "fail"}
 
+        tries = {"n": 0}
+
         def flaky(kind, target, text, key):
+            tries["n"] += 1
             return mode["value"]
 
         missed = usage.deliver(_cfg(), fail_dir, (), NOW, flaky, None)
+        soon = usage.deliver(_cfg(), fail_dir, (), NOW + 16, flaky, None)
+        still = usage.deliver(_cfg(), fail_dir, (), NOW + 299, flaky, None)
+        waiting = json.load(open(usage._report_state(fail_dir), encoding="utf-8"))
+        waiting_slot = list(waiting["items"].values())[0]
         mode["value"] = "ok"
-        retried = usage.deliver(_cfg(), fail_dir, (), NOW, flaky, None)
-        check("明确失败会放掉名额，下一次还能发", missed == [] and retried == ["ou_owner1"])
+        retried = usage.deliver(_cfg(), fail_dir, (), NOW + 300, flaky, None)
+        check("明确失败不马上清槽，大约 5 分钟后才补发",
+              missed == [] and soon == [] and still == [] and retried == ["ou_owner1"]
+              and tries["n"] == 2
+              and waiting_slot.get("status") == "retry"
+              and float(waiting_slot.get("retry_after") or 0) == NOW + 300
+              and "ou_" not in json.dumps(waiting))
         mode["value"] = "unknown"
         usage.deliver(_cfg(owner_open_ids=["ou_owner9"]), fail_dir, (), NOW + 60, flaky, None)
         held = usage.deliver(_cfg(owner_open_ids=["ou_owner9"]), fail_dir, (), NOW + 60, flaky, None)
         check("看不懂结果就保持占坑，不发第二份", held == [])
+
+        dead_dir = tempfile.mkdtemp(prefix="agentbot_dead_")
+        try:
+            os.makedirs(os.path.join(dead_dir, "logs"), exist_ok=True)
+            shutil.copy(FIX, os.path.join(dead_dir, "logs", "usage.jsonl"))
+            dead_calls = []
+            warnings = []
+
+            class _Log:
+                def info(self, msg, *args):
+                    pass
+
+                def warning(self, msg, *args):
+                    warnings.append(msg % args if args else msg)
+
+            def denied(kind, target, text, key):
+                dead_calls.append(target)
+                if target == "ou_owner2":
+                    return "41050 no user authority"
+                return "ok"
+
+            first = usage.deliver(_cfg(owner_open_ids=["ou_owner1", "ou_owner2"]), dead_dir, (), NOW, denied, _Log())
+            for step in (16, 32, 300, 600):
+                usage.deliver(_cfg(owner_open_ids=["ou_owner1", "ou_owner2"]), dead_dir, (), NOW + step, denied, _Log())
+            dead_state = json.load(open(usage._report_state(dead_dir), encoding="utf-8"))
+            statuses = sorted(item.get("status") for item in dead_state["items"].values())
+            blob = json.dumps(dead_state, ensure_ascii=False) + "\n" + "\n".join(warnings)
+            check("41050 只试一次并记成 dead，十几秒和 5 分钟后都不再抢",
+                  first == ["ou_owner1"] and dead_calls == ["ou_owner1", "ou_owner2"]
+                  and statuses == ["dead", "posted"] and warnings == ["report dead week=2026-10-12 reason=no-authority"]
+                  and "ou_" not in blob and "41050" not in blob, blob)
+        finally:
+            shutil.rmtree(dead_dir, ignore_errors=True)
     finally:
         shutil.rmtree(fail_dir, ignore_errors=True)
 

@@ -1079,8 +1079,54 @@ def push_report(cfg, base, names, now, sender, targets, week_text=""):
     return sent
 
 
+# 飞书 41050：机器人没有给这个人发私聊的权限（no user authority）。再试也不会好。
+_PERMANENT_SEND = re.compile(r"41050|no user authority", re.I)
+# 和晨报、播报一样先等大约 5 分钟。维护循环大约 15 秒一次，失败若立刻清坑会被马上再抢。
+_REPORT_RETRY_SEC = 300
+
+
+def classify_send(result):
+    """归成 ok / fail / unknown / dead。dead 不再重试。看不懂的保持 unknown，避免可能已发出的再发一遍。"""
+    if result == "ok":
+        return "ok"
+    if result == "unknown":
+        return "unknown"
+    text = "" if result is None else str(result)
+    if result == "dead" or _PERMANENT_SEND.search(text):
+        return "dead"
+    if result == "fail":
+        return "fail"
+    return "unknown"
+
+
+def _slot_blocked(cur, now):
+    status = (cur or {}).get("status")
+    if status in ("posted", "claimed", "dead"):
+        return True
+    if status != "retry":
+        return False
+    try:
+        due = float(cur.get("retry_after") or 0)
+    except (TypeError, ValueError):
+        due = 0.0
+    return float(now) < due
+
+
+def _send_outcome(results):
+    kinds = [classify_send(item) for item in results]
+    if kinds and all(item == "ok" for item in kinds):
+        return "ok"
+    if any(item == "dead" for item in kinds):
+        return "dead"
+    if any(item == "fail" for item in kinds):
+        return "fail"
+    return "unknown"
+
+
 def deliver(cfg, base, names, now, sender, log=None):
-    """到点后每个主人每周最多一份。先占坑再发送。明确失败会放掉名额。"""
+    """到点后每个主人每周最多一份。先占坑再发送。
+    明确失败不马上清坑，大约 5 分钟后再试。没有私聊权限（41050）记成 dead，只告警一次。
+    超时或看不懂结果仍占着坑，避免发两份。"""
     spec = settings(cfg)
     if not spec["enabled"] or not spec["time_ok"] or not spec["weekday_ok"]:
         return []
@@ -1110,7 +1156,7 @@ def deliver(cfg, base, names, now, sender, log=None):
             state = _load(path)
             items = state.setdefault("items", {})
             cur = items.get(slot) or {}
-            if cur.get("status") in ("posted", "claimed"):
+            if _slot_blocked(cur, now):
                 continue
             items[slot] = {"status": "claimed", "at": float(now)}
             _save(path, state)
@@ -1119,27 +1165,34 @@ def deliver(cfg, base, names, now, sender, log=None):
             key = _outbound().idem_key("report|%s|%s|%d" % (week, _owner_key(owner), index))
             try:
                 results.append(sender("user", owner, part, key))
-            except Exception:
-                results.append("fail")
+            except Exception as exc:
+                msg = str(exc)
+                # 异常正文只用来分类，不写进状态文件，也不打进日志。
+                results.append(msg if _PERMANENT_SEND.search(msg) else "fail")
                 break
-        if results and all(item == "ok" for item in results):
-            outcome = "ok"
-        elif any(item == "fail" for item in results):
-            outcome = "fail"
-        else:
-            outcome = "unknown"
+        outcome = _send_outcome(results)
+        alert = False
         with _digest().outbound_lock(path):
             state = _load(path)
             items = state.setdefault("items", {})
             if outcome == "ok":
                 items[slot] = {"status": "posted", "at": float(now)}
                 sent.append(owner)
+            elif outcome == "dead":
+                notes = state.setdefault("notes", {})
+                mark = slot + "|dead"
+                alert = not notes.get(mark)
+                notes[mark] = 1
+                items[slot] = {"status": "dead", "at": float(now)}
             elif outcome == "fail":
-                items.pop(slot, None)
+                items[slot] = {"status": "retry", "at": float(now), "retry_after": float(now) + _REPORT_RETRY_SEC}
             else:
                 items[slot] = {"status": "claimed", "at": float(now)}
             _save(path, state)
-        if log:
+        if log and outcome == "dead":
+            if alert:
+                log.warning("report dead week=%s reason=no-authority", week)
+        elif log:
             log.info("report %s week=%s parts=%d", "posted" if outcome == "ok" else outcome, week, len(parts))
     return sent
 

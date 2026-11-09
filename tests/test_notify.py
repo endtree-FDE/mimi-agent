@@ -5,7 +5,7 @@ import datetime, json, os, shutil, subprocess, sys, tempfile, time
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, FW)
 import utf8io  # noqa: F401
-import digest, doctor, feishu_link, health_alert, outbound
+import digest, doctor, feishu_link, health_alert, outbound, usage
 
 results = []
 
@@ -190,6 +190,14 @@ try:
     failed = outbound.send(["lark-cli"], "prof_test", "user", "ou_owner1", "你好", outbound.idem_key("y"), [], tmp,
                            run=lambda *a, **k: _Result(2, '{"ok": false}'))
     check("明确失败可以再试", failed == "fail")
+    denied = outbound.send(["lark-cli"], "prof_test", "user", "ou_owner1", "你好", outbound.idem_key("d"), [], tmp,
+                           run=lambda *a, **k: _Result(1, json.dumps({"ok": False, "error": {"code": 41050, "message": "no user authority"}})))
+    check("41050 记成不再重试", denied == "dead")
+    check("周报和发送接口用同一条永久失败规则",
+          usage._PERMANENT_SEND.pattern == outbound._PERMANENT_SEND.pattern)
+    noisy = outbound.send(["lark-cli"], "prof_test", "user", "ou_owner1", "你好", outbound.idem_key("e"), [], tmp,
+                          run=lambda *a, **k: _Result(1, "", "connection reset"))
+    check("网络失败仍是 fail，留给调用方退避", noisy == "fail")
     only = outbound.send(["lark-cli"], "prof_test", "chat", "oc_chat1", "@all", outbound.idem_key("z"), [], tmp, run=_run)
     check("只剩点名所有人时不发", only == "fail")
     check("@allocation 不是点名所有人",

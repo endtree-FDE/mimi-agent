@@ -573,7 +573,7 @@ python checks/check_config.py agents/example.json
 
 默认关。不写这一段，或 `enabled` 不是 `true`，就不会私聊，也不会占每周一次的名额。这是私聊，不是群消息。群里主动发的，是各自打开之后的早晨摘要和播报，默认都关。播报不读日历和任务表。
 
-打开后，到了 `weekday` 和 `time`（不写是周一 `09:00`，时区不写是 `Asia/Shanghai`），把上一整周的合计私聊给主人。`window_min` 不写是 180，这三小时里重启也不会再发一份。`report.owner_open_ids` 有可用编号时用它；空着就用 `alerts.owner_open_ids`，不要求 `alerts` 已经打开。两边都空、或都是 `REPLACE_` 开头，就不发。
+打开后，到了 `weekday` 和 `time`（不写是周一 `09:00`，时区不写是 `Asia/Shanghai`），把上一整周的合计私聊给主人。`window_min` 不写是 180，这三小时里重启也不会再发一份。`report.owner_open_ids` 有可用编号时用它；空着就用 `alerts.owner_open_ids`，不要求 `alerts` 已经打开。两边都空、或都是 `REPLACE_` 开头，就不发。某一位发不出去时，不会马上丢掉这一周的名额再连着试：网络失败大约 5 分钟后再试；飞书 41050（没有私聊权限）记成不再重试，日志只留一次。其它主人不受影响。
 
 统计在本机 `logs/usage.jsonl`。周报里没有问题原文、人名、open_id 或群编号，只有 `群 1` 这种标签。演练（`--dry-run` 或测试替身）和停机后的补答会做标记，不进合计。主人在私聊里发 `/report` 可以马上再看一份，这不占每周的名额；在群里发只回一句「已私聊」，明细不进群。
 
@@ -653,7 +653,7 @@ python checks/check_config.py agents/example.json
 
 ## 知识库同步 kb_sync
 
-`docs_tokens`：要从飞书拉进知识库的文档编号列表。空列表表示不拉。同步只进待审区，你确认后才替换正式知识库。见 `docs/新建智能体.md` 最后一节。
+`docs_tokens`：要从飞书拉进知识库的文档编号列表。空列表表示不拉。同步只进待审区，你确认后才替换正式知识库。见 `docs/新建智能体.md` 最后一节。拉取时和主程序一样优先用 `lark-cli.exe`，参数是列表。只剩 `.cmd` 时，参数里如果出现 `&`、`|` 这类字符就拒绝执行，不交给 cmd.exe。
 
 ## 演练开关
 
