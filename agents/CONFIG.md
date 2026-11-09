@@ -317,6 +317,7 @@ python checks/check_config.py agents/example.json
 | `kb_read` | 按相对路径读取知识库里的 md 或 txt。不写这项时可以读。写成 `{"enabled": false}` 就关掉。`max_chars` 默认 `8000`。跳不出知识库目录。 |
 | `evidencegate_check` | EvidenceGate 门禁：校验文档 AI（OCR）输出，返回三路由（ACCEPT_CANDIDATE / HUMAN_REVIEW / MODEL_OUTPUT_INVALID）与字段证据。默认关，`enabled: true` 才可用。可选 `schema` 换门禁契约 JSON 的实例内相对路径，`node` 换 Node 可执行文件。只读，不改业务。见 skills/evidencegate-ocr/SKILL.md。 |
 | `decision_gate_check` | juchang 决策门禁查询：按「证据状态×动作等级×可逆性」算出写动作的路由（automatic / after_approval / manual_only / blocked）与理由。默认关。只读，分数只排先后不给许可。脚本固定在 skills/juchang-decision-gate/scripts/。 |
+| `evidence_replay_check` | 证据回放核对：校验回放归档的三模式标签、哈希与缺口登记，输出 pass / fail。默认关。只读，通过只证明归档与登记一致。见 skills/juchang-evidence-replay/SKILL.md。 |
 | `receipt_verify` | Matrix 回执核验：离线校验 caller 提供的 accepted@2 导出，结果只证明内部一致，不证明来源真实。默认关，且只对 Matrix 生态的导出有用。 |
 | `web` | 只影响常驻模式里「打开网页」。`allow_fake_ip_ranges` 默认 `["198.18.0.0/15"]`。Clash 这类假 IP 代理会把公网域名解析到这个段。用域名访问、并且两次解析都落在这段里时放行。网址里直接写 `198.18.x` 仍然拒绝。`127/8`、`10/8`、`172.16/12`、`192.168/16`、`169.254/16`、`100.64/10`、`::1` 一律拒绝，写进这个列表也不放行。跳转每一跳都按同一规则检查。没写 `web` 时也是这个默认。写成 `[]` 或 `false` 就连假 IP 段也不放行。 |
 | `docs_create` | 在专用文件夹新建文档。要确认码。 |
@@ -326,6 +327,8 @@ python checks/check_config.py agents/example.json
 | `calendar_update` | 修改已有日程（标题、时间、说明）。命令里固定不通知参会人，也不能改参会人。要确认码。没写这项时，跟着 `calendar_create`。 |
 | `calendar_delete` | 删除已有日程。同样不通知参会人。要确认码。没写这项时，跟着 `calendar_create`。写了 `enabled: false` 就关掉，不会跟着建日程一起开。 |
 | `base_create` | 在表格里加一条记录。要确认码。 |
+
+`agents/example.json` 里 `evidencegate_check`、`decision_gate_check`、`evidence_replay_check`、`receipt_verify` 四项都是 `"enabled": false`。它们是主程序的只读配套，本地控制面的清单里没有它们。
 
 飞书接口报错时，会先看 stdout，没有 JSON 再看 stderr。文档不存在、编号不是云文档、没有权限、权限未开通，会分别说明，而不是都说成「接口暂时不可用」。
 
@@ -660,5 +663,23 @@ python checks/check_config.py agents/example.json
 `dry_run_live_reads`：演练时要不要真的去读飞书。默认 `false`，演练只在屏幕上打印命令，不发消息。不要为了省事改成 `true`，除非你知道自己在演练、并且只读。
 
 写操作在演练里默认也不真的执行。只有你本人在环境变量里打开 `AGENTBOT_DRY_LIVE_WRITES=1` 时才会真的写。验收时才这么做，并且用单独的测试表。
+
+## 项目级 mcp.json 示例
+
+本地控制面不写进 `agents/*.json`。Cursor 在仓库根放 `.cursor/mcp.json`（项目级，只对这个仓库生效）。`command` 的 `python` 是占位，换成你本机跑这个仓库的 Python 3.12；PATH 对不上时改成该解释器的绝对路径。`args` 是 `["mcp_server.py", "agents/<name>.json"]`，`cwd` 是仓库根。示例里没有 `env`，也不写密钥。填好本机路径的文件留在自己电脑上。启动参数、三个只读工具和只读边界见 [docs/本地控制面.md](../docs/本地控制面.md)。
+
+```json
+{
+  "mcpServers": {
+    "mimi-agent": {
+      "command": "python",
+      "args": ["mcp_server.py", "agents/<name>.json"],
+      "cwd": "."
+    }
+  }
+}
+```
+
+上面「工具 tools」里的 `decision_gate_check` 等四项只读配套在 `agents/example.json` 里保持关闭。`write.decision_gate` 也保持关闭。控制面不暴露写入。
 
 > AI生成
