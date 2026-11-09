@@ -1,6 +1,6 @@
 # 写入确认方式。默认点卡片上的按钮。飞书没开通卡片回调时，自动改用确认码。
 # 确认不能关掉。高风险动作可以单独指定一种方式。
-import hashlib, json, os, re, secrets, time
+import hashlib, hmac, json, os, re, secrets, time
 
 CARD_EVENT = "card.action.trigger"
 MODES = ("button", "code", "button_or_code", "button_and_code")
@@ -316,6 +316,39 @@ def action_hash(tool, steps, user, chat, scope, extra=""):
     }
     raw = json.dumps(blob, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def param_digest_record(rec):
+    """钉住这次真正会执行的参数。确认过程中改按钮状态、退回确认码，都不进这串摘要。
+    算不出来就返回空串，调用方按对不上处理，不能当成通过。"""
+    rec = rec if isinstance(rec, dict) else {}
+    steps = rec.get("steps") if isinstance(rec.get("steps"), list) else []
+    argv = rec.get("argv") if isinstance(rec.get("argv"), list) else []
+    blob = {
+        "v": 1,
+        "tool": str(rec.get("tool") or ""),
+        "steps": steps,
+        "argv": argv,
+        "memory_text": str(rec.get("memory_text") or ""),
+        "notify_all": True if rec.get("notify_all") else False,
+        "summary": str(rec.get("summary") or ""),
+        "user": str(rec.get("user") or ""),
+        "chat": str(rec.get("chat_id") or ""),
+        "scope": str(rec.get("scope") or ""),
+    }
+    try:
+        raw = json.dumps(blob, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return ""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def digest_equal(left, right):
+    """摘要对账。空的、长度不同的都不算通过。"""
+    a, b = str(left or ""), str(right or "")
+    if not a or len(a) != len(b):
+        return False
+    return hmac.compare_digest(a, b)
 
 
 def impact(name, notify=False):

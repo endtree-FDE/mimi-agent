@@ -1,5 +1,5 @@
 # 工具层：只允许白名单内的 lark-cli 命令，统一 --as bot；写操作要确认；全部写审计日志；缺权限优雅降级。
-import json, os, re, sqlite3, subprocess, struct, tempfile, time, random, threading, datetime, glob, shutil, zipfile
+import copy, json, os, re, sqlite3, subprocess, struct, tempfile, time, random, threading, datetime, glob, shutil, zipfile
 import confirm_mode, guard, review_roster, skills, usage
 from channels.base import TOOL_CAPS
 
@@ -19,6 +19,7 @@ def run_capture(cmd, cwd=None, timeout=60):
 
 _CMD_UNSAFE = re.compile(r'["&|<>^%!\r\n]')
 _ACTOR_RX = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+_PARAM_PIN_MSG = "要执行的内容和提议时不一致，没有执行。请重新发起。"
 
 def _actor_ok(ctx):
     """发送人和会话都必须是非空的普通编号。空、问号或带路径的值不能发起或确认。"""
@@ -988,19 +989,20 @@ class Tools:
     def _propose_record(self, name, summary, steps, argv, ctx, notify, memory_text="", gate=None):
         plan = confirm_mode.plan(self.cfg, self.base, confirm_mode.is_high_risk(name))
         scope = str(ctx.get("scope") or "")
-        ah = confirm_mode.action_hash(name, steps, ctx["user"], ctx["chat_id"], scope, memory_text[:80] if memory_text else "")
         now = time.time()
         rec = {"tool": name, "argv": argv, "steps": steps, "summary": summary, "user": ctx["user"],
                "chat_id": ctx["chat_id"], "scope": scope, "ts": now, "notify_all": bool(notify),
                "usage_scope": "p2p" if ctx.get("chat_type") == "p2p" else "group",
-               "mode": plan["mode"], "token": plan["token"], "action_hash": ah,
+               "mode": plan["mode"], "token": plan["token"],
                "expires": now + plan["ttl"], "button_ok": False, "code_ok": False,
                "fallback": plan["fallback"], "impact": confirm_mode.impact(name, notify)}
         if gate and gate.get("approval") == "dual":
             rec["dual"] = True
         if memory_text:
             rec["memory_text"] = memory_text
+        # 摘要和卡片校验值在落盘时一起钉死，避免先算哈希、后改参数。
         code = self._reserve(rec)
+        ah = str(rec.get("action_hash") or "")
         audit_kw = dict(kind="write_proposed", tool=name, user=ctx["user"], chat=ctx["chat_id"], code=code,
                         token=plan["token"], summary=summary, scope=ctx.get("chat_type"))
         if gate:
@@ -1166,6 +1168,8 @@ class Tools:
         conn.execute("create table if not exists pending_writes(code text primary key, ts real, payload text)")
         conn.execute("create table if not exists used_writes(code text primary key, ts real)")
         conn.execute("create table if not exists used_confirm_tokens(token text primary key, ts real)")
+        # 参数摘要单独一张表：更新待确认正文时不写它，确认前对不上就拒绝。
+        conn.execute("create table if not exists write_param_seals(code text primary key, digest text not null, ts real)")
         self._db = conn
         return conn
 
@@ -1204,23 +1208,98 @@ class Tools:
                 self.pending[code] = rec
 
     def _save_pending(self, code, rec):
-        """只插入。撞上已有的码就失败，不能覆盖别人还没确认的操作。"""
+        """只插入。撞上已有的码就失败，不能覆盖别人还没确认的操作。
+        参数摘要写在另一张表，之后更新 payload 改不到它。"""
+        digest = self._bind_param_digest(rec)
+        if not digest:
+            return False
+        db = self._state_db()
         try:
-            self._state_db().execute("insert into pending_writes(code, ts, payload) values(?,?,?)",
-                                     (code, rec.get("ts") or time.time(), json.dumps(rec, ensure_ascii=False)))
-            self._state_db().commit()
+            db.execute("insert into pending_writes(code, ts, payload) values(?,?,?)",
+                       (code, rec.get("ts") or time.time(), json.dumps(rec, ensure_ascii=False)))
+            db.execute("insert into write_param_seals(code, digest, ts) values(?,?,?)",
+                       (code, digest, time.time()))
+            db.commit()
             return True
         except sqlite3.IntegrityError:
+            try: db.rollback()
+            except Exception: pass
             return False
         except Exception as e:
+            try: db.rollback()
+            except Exception: pass
             self.log.warning("pending save failed: %s", guard.redact(str(e), self.names)[:200])
             return False
+
+    def _bind_param_digest(self, rec):
+        """按当前记录钉摘要，并让卡片上的校验值承诺同一份摘要。"""
+        if not isinstance(rec, dict):
+            return ""
+        digest = confirm_mode.param_digest_record(rec)
+        if not digest:
+            return ""
+        steps = rec.get("steps") if isinstance(rec.get("steps"), list) else []
+        rec["param_digest"] = digest
+        rec["action_hash"] = confirm_mode.action_hash(
+            rec.get("tool"), steps, rec.get("user"), rec.get("chat_id"), str(rec.get("scope") or ""), digest)
+        return digest
+
+    def _sealed_param_digest(self, code):
+        try:
+            row = self._state_db().execute(
+                "select digest from write_param_seals where code=?", (str(code),)).fetchone()
+        except Exception:
+            return ""
+        if not row or not row[0]:
+            return ""
+        return str(row[0])
+
+    def _pin_write_params(self, code, rec):
+        """没走提案落盘的记录补钉一份摘要。已有的不覆盖。"""
+        code = str(code or "")
+        if not code or not isinstance(rec, dict):
+            return False
+        digest = confirm_mode.param_digest_record(rec)
+        if not digest:
+            return False
+        try:
+            db = self._state_db()
+            db.execute("insert or ignore into write_param_seals(code, digest, ts) values(?,?,?)",
+                       (code, digest, time.time()))
+            db.commit()
+        except Exception as e:
+            self.log.warning("param seal failed: %s", guard.redact(str(e), self.names)[:200])
+            return False
+        return confirm_mode.digest_equal(self._sealed_param_digest(code), digest)
+
+    def _drop_seal(self, code):
+        try:
+            self._state_db().execute("delete from write_param_seals where code=?", (str(code),))
+            self._state_db().commit()
+        except Exception as e:
+            self.log.warning("param seal drop failed: %s", guard.redact(str(e), self.names)[:200])
+
+    def _pinned_copy(self, code, rec, ctx):
+        """核对独立表里的参数摘要。通过则返回可执行的快照；对不上记审计并返回 None。
+        不看记录里自带的 param_digest 字段，那个和正文在一起，能被一起改掉。"""
+        if not isinstance(rec, dict):
+            rec = {}
+        sealed = self._sealed_param_digest(code)
+        digest = confirm_mode.param_digest_record(rec)
+        if confirm_mode.digest_equal(sealed, digest):
+            return copy.deepcopy(rec)
+        why = "missing" if not sealed else "mismatch"
+        self.audit(kind="write_denied", tool=rec.get("tool"), user=(ctx or {}).get("user"),
+                   chat=(ctx or {}).get("chat_id"), code=code, token=rec.get("token") or "",
+                   err="param_digest", detail=why)
+        return None
 
     def _expire_pending(self, code, payload=None):
         """确认码过了有效期。审计只记动作，不把待写入的正文再抄一遍。"""
         p = payload if isinstance(payload, dict) else (self.pending.get(code) or {})
         self.pending.pop(code, None)
         self._drop_pending(code)
+        self._drop_seal(code)
         self.audit(kind="write_expired", tool=str(p.get("tool") or ""), user=str(p.get("user") or ""),
                    chat=str(p.get("chat_id") or ""), scope=p.get("usage_scope") or "")
 
@@ -1289,6 +1368,9 @@ class Tools:
         try:
             self._state_db().execute("delete from used_writes where ts < ?", (time.time() - 86400,))
             self._state_db().execute("delete from used_confirm_tokens where ts < ?", (time.time() - 86400,))
+            self._state_db().execute(
+                "delete from write_param_seals where ts < ? and code not in (select code from pending_writes)",
+                (time.time() - 86400,))
             self._state_db().commit()
         except Exception:
             pass
@@ -1319,6 +1401,11 @@ class Tools:
             mode = p.get("mode") or "code"
             if mode == "button":
                 return "这次请点卡片上的「确认」或「取消」。回复数字不算。"
+            if not cancel:
+                pinned = self._pinned_copy(code, p, ctx)
+                if pinned is None:
+                    return _PARAM_PIN_MSG
+                p = pinned
             if mode == "button_and_code" and not cancel and not p.get("button_ok"):
                 p["code_ok"] = True
                 self.pending[code] = p
@@ -1384,6 +1471,10 @@ class Tools:
                 self.audit(kind="write_denied", tool=p.get("tool"), user=ctx.get("user"), chat=ctx.get("chat_id"),
                            code=code, err=err)
                 return said
+            pinned = self._pinned_copy(code, p, ctx)
+            if pinned is None:
+                return _PARAM_PIN_MSG
+            p = pinned
             if not self._mark_used(code, p.get("token") or ""): return "确认没能记下，请稍后再试。"
             self.pending.pop(code, None); self._drop_pending(code)
             self.audit(kind="write_confirmed", tool=p.get("tool"), user=ctx.get("user"), chat=ctx.get("chat_id"),
@@ -1419,6 +1510,11 @@ class Tools:
             cancel = op == "no"
             if mode == "code":
                 return {"text": "这次请回复确认码，点按钮不算。", "card": None, "patch": False, "ok": False}
+            if not cancel:
+                pinned = self._pinned_copy(code, p, ctx)
+                if pinned is None:
+                    return {"text": _PARAM_PIN_MSG, "card": None, "patch": False, "ok": False}
+                p = pinned
             if mode == "button_and_code" and not cancel and not p.get("code_ok"):
                 p["button_ok"] = True
                 self.pending[code] = p
@@ -1447,23 +1543,29 @@ class Tools:
 
     def _finish_write(self, p, ctx, code, cancel):
         if cancel:
+            self._drop_seal(code)
             self.audit(kind="write_cancelled", tool=p["tool"], user=ctx["user"], chat=ctx.get("chat_id"), code=code,
                        token=p.get("token") or "", scope=ctx.get("chat_type") or p.get("usage_scope"))
             return "已取消。"
-        if p.get("tool") == "memory_propose":
+        # 锁外再对一次，执行的是对上的那份快照，不是后来被改过的同一对象。
+        snap = self._pinned_copy(code, p, ctx)
+        self._drop_seal(code)
+        if snap is None:
+            return _PARAM_PIN_MSG
+        if snap.get("tool") == "memory_propose":
             hook = getattr(self, "memory_hook", None)
             if not hook:
-                self.audit(kind="write_failed", tool="memory_propose", user=ctx["user"], code=code, token=p.get("token") or "", err="no hook")
+                self.audit(kind="write_failed", tool="memory_propose", user=ctx["user"], code=code, token=snap.get("token") or "", err="no hook")
                 return "记忆功能还没接上。"
-            try: msg = hook(p.get("memory_text") or "", ctx)
+            try: msg = hook(snap.get("memory_text") or "", ctx)
             except Exception as e:
-                self.audit(kind="write_failed", tool="memory_propose", user=ctx["user"], code=code, token=p.get("token") or "", err=str(e)[:200])
+                self.audit(kind="write_failed", tool="memory_propose", user=ctx["user"], code=code, token=snap.get("token") or "", err=str(e)[:200])
                 return "执行失败：" + str(e)[:120]
             kind = "write_done" if str(msg).startswith("已记") else "write_failed"
             self.audit(kind=kind, tool="memory_propose", user=ctx["user"], chat=ctx["chat_id"], code=code,
-                       token=p.get("token") or "", summary=p.get("summary"), result=_brief(msg))
+                       token=snap.get("token") or "", summary=snap.get("summary"), result=_brief(msg))
             return msg
-        steps = p.get("steps") or [{"tool": p.get("tool"), "argv": p.get("argv") or []}]
+        steps = snap.get("steps") or [{"tool": snap.get("tool"), "argv": snap.get("argv") or []}]
         links, done = [], 0
         try:
             for st in steps:
@@ -1472,13 +1574,13 @@ class Tools:
                 link = d.get("url") or d.get("doc" + "_url") or (d.get("document") or {}).get("url") or d.get("app_link") or ""
                 if link: links.append(link)
         except ToolError as e:
-            self.audit(kind="write_failed", tool=p["tool"], user=ctx["user"], code=code, token=p.get("token") or "", err=e.user_msg, detail=e.detail[:300])
+            self.audit(kind="write_failed", tool=snap["tool"], user=ctx["user"], code=code, token=snap.get("token") or "", err=e.user_msg, detail=e.detail[:300])
             if done: return "已完成 %d/%d 步。后面的失败了：%s" % (done, len(steps), e.user_msg)
             return "执行失败：" + e.user_msg
-        self.audit(kind="write_done", tool=p["tool"], user=ctx["user"], chat=ctx["chat_id"], code=code,
-                   token=p.get("token") or "", summary=p["summary"], result=_brief({"n": done, "links": links[:5]}))
-        msg = "已完成：%s%s" % (p["summary"], ("\n" + "\n".join(links)) if links else "")
-        if p.get("notify_all"): msg = '<at user_id="all"></at>\n' + msg
+        self.audit(kind="write_done", tool=snap["tool"], user=ctx["user"], chat=ctx["chat_id"], code=code,
+                   token=snap.get("token") or "", summary=snap["summary"], result=_brief({"n": done, "links": links[:5]}))
+        msg = "已完成：%s%s" % (snap["summary"], ("\n" + "\n".join(links)) if links else "")
+        if snap.get("notify_all"): msg = '<at user_id="all"></at>\n' + msg
         return msg
 
     # ---------- 附件（图片/文件） ----------
