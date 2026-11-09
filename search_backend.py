@@ -1,6 +1,6 @@
 # 可选的网页搜索。默认关。新模型没有自带联网时，用 web_search 走这里。
 # 密钥只从环境变量读，不写进日志。
-import json, urllib.error, urllib.parse, urllib.request
+import json, socket, urllib.error, urllib.parse, urllib.request
 
 import guard
 from providers.settings import TAVILY_ENV, TAVILY_URL, looks_like_secret, search_settings
@@ -10,6 +10,18 @@ class SearchError(Exception):
     def __init__(self, user_msg):
         super().__init__(user_msg)
         self.user_msg = user_msg
+
+
+class SearchTimeout(SearchError):
+    """读超时。给调用方一句和别的失败一样的话；工具档位打开时再换成原因码。"""
+    def __init__(self):
+        super().__init__("搜索请求失败")
+
+
+def _timed_out(exc):
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    return isinstance(getattr(exc, "reason", None), (TimeoutError, socket.timeout))
 
 
 def enabled(cfg):
@@ -71,7 +83,9 @@ def _tavily(spec, query, names):
         try: exc.close()
         except Exception: pass
         raise SearchError("搜索请求失败 HTTP %s" % exc.code)
-    except Exception:
+    except Exception as exc:
+        if _timed_out(exc):
+            raise SearchTimeout()
         raise SearchError("搜索请求失败")
     try:
         obj = json.loads(raw.decode("utf-8", "replace"))
@@ -109,7 +123,9 @@ def _searx(spec, query, names):
         try: exc.close()
         except Exception: pass
         raise SearchError("搜索请求失败 HTTP %s" % exc.code)
-    except Exception:
+    except Exception as exc:
+        if _timed_out(exc):
+            raise SearchTimeout()
         raise SearchError("搜索请求失败")
     try:
         obj = json.loads(raw.decode("utf-8", "replace"))

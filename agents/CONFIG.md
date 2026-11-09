@@ -327,6 +327,17 @@ python checks/check_config.py agents/example.json
 | `calendar_update` | 修改已有日程（标题、时间、说明）。命令里固定不通知参会人，也不能改参会人。要确认码。没写这项时，跟着 `calendar_create`。 |
 | `calendar_delete` | 删除已有日程。同样不通知参会人。要确认码。没写这项时，跟着 `calendar_create`。写了 `enabled: false` 就关掉，不会跟着建日程一起开。 |
 | `base_create` | 在表格里加一条记录。要确认码。 |
+| `timeouts` | 工具调用超时档位。`enabled` 不写或不是 `true` 时不生效：各调用仍用原来的秒数（多数 60 秒，附件下载 120 秒），超时仍按网络错误最多重试三次。写成 `true` 才按下面三档限时，超时会杀掉这次命令、不重试，并回复一句原因。原因码是 `tool_timeout_read`、`tool_timeout_write`、`tool_timeout_long`。日志只记原因码和工具名。 |
+
+`timeouts` 的秒数：
+
+| 键 | 默认 | 谁用 |
+|---|---|---|
+| `read_sec` | `20` | 群历史、文档、日历、表格、知识库、网页搜索这类只读。范围 5 到 60，越界退回 20。 |
+| `write_sec` | `45` | 确认之后真正执行的写入命令，一步一次。范围 10 到 120，越界退回 45。 |
+| `long_sec` | `120` | 附件下载，以及证据门禁、决策门禁、回放核对、回执核验这几个本机脚本。范围 30 到 180，越界退回 120。 |
+
+这套钟只管「这一次命令最多跑多久」。等人点头的时间仍是 `write.confirm_ttl_sec`（确认码，默认 300 秒）和 `confirm.ttl_sec`（按钮，默认 600 秒）。工具超时不会把还没到期的确认码标成过期，也不会去私聊提醒。批量写入某一步超时就停，不继续后面的步；已经做成的步会在回复里说明。
 
 `agents/example.json` 里 `evidencegate_check`、`decision_gate_check`、`evidence_replay_check`、`receipt_verify` 四项都是 `"enabled": false`。它们是主程序的只读配套，本地控制面的清单里没有它们。
 
@@ -345,7 +356,7 @@ python checks/check_config.py agents/example.json
 | 键 | 填什么 |
 |---|---|
 | `enabled` | `true` 才允许提议写入。升级时可以先改成 `false`，等只读稳定了再开。 |
-| `confirm_ttl_sec` | 确认码有效秒数，默认 `300`（5 分钟）。确认码写在 `state/state.db`，进程重启后、过期之前仍然有效。过期或用过就删掉。 |
+| `confirm_ttl_sec` | 确认码有效秒数，默认 `300`（5 分钟）。确认码写在 `state/state.db`，进程重启后、过期之前仍然有效。过期或用过就删掉。这是等人确认的钟，不是工具命令的超时；命令超时见上面的 `tools.timeouts`。 |
 | `allowed_users` | 谁可以发起写入、谁可以改群记忆。左边是这个人的编号，右边是称呼，例如 `"REPLACE_USER_OPEN_ID": "小李"`。右边的称呼只用于回复和审计，改成真人的称呼。 |
 | `resources.folder_token` | 专用文档文件夹的编号。新建文档只进这个文件夹。 |
 | `resources.docs_append_tokens` | 允许在末尾追加的文档编号列表。空列表表示还不能追加。 |

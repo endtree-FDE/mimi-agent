@@ -1,7 +1,7 @@
 # 主理人加专员：复杂问题拆成查资料、读文档、起草。默认关。
 # 都在当前这个进程里做，不另开收消息进程。专员只有只读工具，写入仍走原来的白名单和确认。
 import json, re, time
-import calltrace, guard
+import calltrace, guard, tool_timeout
 
 _WRITE = {"docs_create", "docs_append", "calendar_create", "calendar_create_batch", "calendar_update", "calendar_delete", "base_create"}
 _ROLES = (
@@ -225,6 +225,9 @@ def run(cfg, question, ctx, complete, run_tool, on_stage=None, clock=None, names
                     blocks.append("工具 %s：没有读成。" % tool)
                     continue
                 if done:
+                    # 超时已经是给用户的那一句。不再往下叫模型，也不把它说成「需要确认」。
+                    if tool_timeout.is_user_message(result):
+                        return str(result)
                     blocks.append("工具 %s：需要确认的操作已停下，没有绕过确认。" % tool)
                     continue
                 shown = guard.redact(str(result or ""), names)

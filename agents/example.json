@@ -202,6 +202,12 @@
   "redact_file": "redact.txt",
   "help_pattern": "你(能|会|可以)(干|做|帮)(什么|啥)|你有(什么|哪些|啥)(权限|功能|能力)|^有(什么|哪些|啥)(权限|功能)[?？]?$|你是谁|怎么用你",
   "tools": {
+    "timeouts": {
+      "enabled": false,
+      "read_sec": 20,
+      "write_sec": 45,
+      "long_sec": 120
+    },
     "history": {
       "enabled": true,
       "days": 7,
