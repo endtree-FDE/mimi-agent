@@ -291,6 +291,10 @@
   "write": {
     "enabled": true,
     "confirm_ttl_sec": 300,
+    "escalate": {
+      "enabled": false,
+      "notify": "owner"
+    },
     "max_batch": 10,
     "decision_gate": {
       "enabled": false,

@@ -1,7 +1,7 @@
 # 只读诊断。不启动 event consume，不发消息，不写心跳。
 # 外部命令、进程列表、域名解析都由调用方传入，测试不必连真的飞书。
 import base64, csv, io, json, os, re, socket, subprocess, time
-import confirm_mode, guard, lifecycle, proc_identity
+import confirm_mode, guard, lifecycle, pending_queue, proc_identity
 
 _SCOPE_RX = re.compile(r"\b[a-z][a-z0-9_.]*(?::[a-z0-9_.]+){1,8}\b")
 _SECRET_KEY = re.compile(r"^(app_secret|api_key|api_secret|password|passwd)$", re.I)
@@ -1043,6 +1043,10 @@ def report(cfg, base, exe, run, processes, resolve, connect, modules, env):
     now = time.time()
     level, info = restart_ledger(os.path.join(base, "logs", "events.jsonl"), now, window, warn_after)
     add(level, "restart", info)
+    # 待确认队列只读一行，放在名单之前，让 checklist 把它算进去。
+    # 没有库就是 0，不建文件，也不因为有人还没点确认而判失败。
+    level, name, info = pending_queue.doctor_line(base)
+    add(level, name, info)
     # 起停、最近一次成功、最近一条失败都是只读探针，不新开连接，也不改退出码语义：
     # 没在跑、旧的失败本身不是 FAIL。名单放在最后，把前面每一项收进去。
     level, info = service_status(base, procs, now, cfg)
