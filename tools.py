@@ -996,6 +996,8 @@ class Tools:
                "mode": plan["mode"], "token": plan["token"], "action_hash": ah,
                "expires": now + plan["ttl"], "button_ok": False, "code_ok": False,
                "fallback": plan["fallback"], "impact": confirm_mode.impact(name, notify)}
+        if gate and gate.get("approval") == "dual":
+            rec["dual"] = True
         if memory_text:
             rec["memory_text"] = memory_text
         code = self._reserve(rec)
@@ -1014,7 +1016,7 @@ class Tools:
             else:
                 out = "将要执行：%s\n请发起人在 %d 分钟内 @我 回复「确认 %s」执行，或「取消 %s」。" % (summary, minutes, code, code)
             if gate and gate.get("approval") == "dual":
-                out += "\n决策门禁：这个动作按门禁需双人复核；机器人只执行单人确认流，另一位管理员请直接跟帖复核。"
+                out += "\n决策门禁：这个动作按门禁需双人复核；发起人回复「确认 %s」后，还需另一位管理员本会话回复「复核 %s」才会执行，只有一位确认不会动任何数据。" % (code, code)
             return out
         shown = summary if not memory_text else ("记入本群记忆：" + memory_text[:200])
         text = confirm_mode.button_text(guard.redact(shown, self.names), rec["impact"], plan["mode"], code, plan["ttl"])
@@ -1321,9 +1323,45 @@ class Tools:
                 if not self._update_pending(code, p):
                     return "确认没能记下，请稍后再试。"
                 return "确认码已记下。请再点卡片上的「确认」。"
+            if p.get("dual") and not cancel:
+                p["first_ok"] = True; p["first_user"] = ctx["user"]; p["first_at"] = time.time()
+                self.pending[code] = p
+                if not self._update_pending(code, p):
+                    return "确认没能记下，请稍后再试。"
+                left = max(1, int((float(p.get("expires") or time.time()) - time.time()) // 60))
+                self.audit(kind="write_confirmed", tool=p.get("tool"), user=ctx["user"], chat=ctx.get("chat_id"),
+                           code=code, token=p.get("token") or "", summary=p.get("summary"), detail="dual first")
+                return "第一位确认已记下。请另一位管理员在 %d 分钟内本会话回复「复核 %s」才会执行；只有一位确认不会动任何数据。" % (left, code)
             if not self._mark_used(code, p.get("token") or ""): return "确认没能记下，请稍后再试。"
             self.pending.pop(code, None); self._drop_pending(code)
         return self._finish_write(p, ctx, code, cancel)
+
+    def review(self, code, ctx):
+        """门禁双人复核的第二步：发起人确认后，另一位白名单管理员在本会话回复「复核 码」才执行。
+        复核独立于 confirm()——那里被同发起人校验挡住，第二人永远进不来；取消仍只归发起人。"""
+        ctx = ctx or {}
+        if not _actor_ok(ctx) or not _ACTOR_RX.match(str(ctx.get("message_id") or "")):
+            return "不能复核：缺少发送人或原消息。"
+        with self.pl:
+            self._gc(); p = self.pending.get(code)
+            if not p or self._code_used(code): return "确认码无效或已过期。"
+            if not p.get("dual"):
+                return "这条确认不需要复核。请发起人回复「确认 %s」执行。" % code
+            if not p.get("first_ok"):
+                return "还没到复核步骤：请发起人先回复「确认 %s」，另一位管理员再复核。" % code
+            if ctx.get("chat_id") != p.get("chat_id"):
+                return "复核要在发起的那个会话里进行。"
+            if ctx.get("user") == p.get("first_user"):
+                return "复核需要另一位管理员，发起人自己复核不算。"
+            if ctx.get("user") not in (self.w.get("allowed_users") or {}):
+                self.audit(kind="write_denied", tool=p.get("tool"), user=ctx.get("user"), chat=ctx.get("chat_id"),
+                           code=code, err="reviewer not allowed")
+                return "复核需要写入白名单里的管理员，你不在名单上。"
+            if not self._mark_used(code, p.get("token") or ""): return "确认没能记下，请稍后再试。"
+            self.pending.pop(code, None); self._drop_pending(code)
+            self.audit(kind="write_confirmed", tool=p.get("tool"), user=ctx.get("user"), chat=ctx.get("chat_id"),
+                       code=code, token=p.get("token") or "", summary=p.get("summary"), detail="dual second")
+        return self._finish_write(p, ctx, code, False)
 
     def confirm_click(self, token, op, given_hash, ctx, message_id=""):
         """卡片按钮。返回给界面的文字和更新后的卡片。记号不是我们发的时 text 说明无效。"""
@@ -1362,6 +1400,16 @@ class Tools:
                 return {"text": "按钮已记下。请再回复确认码。",
                         "card": confirm_mode.done_card("还差确认码", "按钮已记下。请在原来的会话里回复确认码。"),
                         "patch": True, "ok": False}
+            if p.get("dual") and not cancel:
+                p["first_ok"] = True; p["first_user"] = ctx["user"]; p["first_at"] = time.time()
+                self.pending[code] = p
+                if not self._update_pending(code, p):
+                    return {"text": "确认没能记下，请稍后再试。", "card": None, "patch": False, "ok": False}
+                left = max(1, int((float(p.get("expires") or time.time()) - time.time()) // 60))
+                self.audit(kind="write_confirmed", tool=p.get("tool"), user=ctx["user"], chat=ctx.get("chat_id"),
+                           code=code, token=p.get("token") or "", summary=p.get("summary"), detail="dual first")
+                text = "第一位确认已记下。请另一位管理员在 %d 分钟内本会话回复「复核 %s」才会执行。" % (left, code)
+                return {"text": text, "card": confirm_mode.done_card("还差复核", text), "patch": True, "ok": False}
             if not self._mark_used(code, token):
                 return {"text": "确认没能记下，请稍后再试。", "card": None, "patch": False, "ok": False}
             self.pending.pop(code, None); self._drop_pending(code)

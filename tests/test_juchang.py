@@ -6,6 +6,7 @@ import datetime, hashlib, json, logging, os, shutil, subprocess, sys, tempfile, 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, FW)
 import utf8io  # noqa: F401
+import confirm_mode  # noqa: F401
 from tools import Tools, ToolError, READ_TOOLS
 
 results = []
@@ -43,9 +44,9 @@ def new_tools(tools_cfg, write_cfg=None):
     return base, Tools(cfg, base, lambda: ["lark-cli"], logging.getLogger("jc"), dry=True)
 
 
-def write_cfg(gate=None):
+def write_cfg(gate=None, users=None):
     w = {"enabled": True, "confirm_ttl_sec": 300,
-         "allowed_users": {"user_jc": "测试管理员"},
+         "allowed_users": dict(users or {"user_jc": "测试管理员"}),
          "resources": {"folder_token": "fld_demo", "calendar_id": "cal_demo"}}
     if gate is not None:
         w["decision_gate"] = gate
@@ -350,7 +351,7 @@ def test_gate_wrapper():
                         write_cfg({"enabled": True, "tools": {"docs_create": {"level": "L2", "impact": "critical"}}}))
     try:
         out = t.propose_write("docs_create", {"title": "重要变更", "markdown": "内容"}, dict(CTX))
-        check("dual 审批提示双人复核边界", "双人复核" in out and "单人确认流" in out, out)
+        check("dual 审批提示两步确认与另一位管理员", "双人复核" in out and "另一位管理员" in out and "复核" in out, out)
         gate = [e.get("gate") for e in audit_events(base) if e.get("kind") == "write_proposed"]
         check("dual 路由进审计 approval=dual", gate and gate[0].get("approval") == "dual", gate)
     finally:
@@ -415,6 +416,84 @@ def make_ledger_base():
     with open(os.path.join(base, "audit", "202611.jsonl"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return base
+
+
+def test_dual_review():
+    """门禁 dual：第一位（发起人）确认只记下，第二位白名单管理员「复核 码」才执行；边界与审计。"""
+    users = {"user_jc": "发起管理员", "user_jc2": "复核管理员"}
+    dg = {"enabled": True, "tools": {"docs_create": {"level": "L2", "impact": "critical"}}}
+
+    def fresh():
+        base, t = new_tools({"docs_create": {"enabled": True}}, write_cfg(dg, users=users))
+        box = []
+
+        def fake(argv):
+            box.append(list(argv))
+            return {"ok": True, "data": {"url": "https://example.com/docx/NEW"}}
+
+        t.fake = fake
+        return base, t, box
+
+    base, t, box = fresh()
+    ctx2 = dict(CTX, user="user_jc2", message_id="om_jc2_0001")
+    try:
+        out = t.propose_write("docs_create", {"title": "重要变更", "markdown": "内容"}, dict(CTX))
+        code, rec = next(iter(t.pending.items()))
+        check("dual 提案带 dual 标记且文案写清两步", rec.get("dual") is True and "双人复核" in out and "另一位管理员" in out, rec)
+        early = t.review(code, dict(ctx2))
+        check("第一位没确认前复核被挡", "还没到复核步骤" in early and not box, early)
+        first = t.confirm(code, dict(CTX))
+        check("第一位确认只记下不执行", "第一位确认已记下" in first and "复核" in first and not box, first)
+        self_r = t.review(code, dict(CTX))
+        check("发起人自己复核不算", "另一位管理员" in self_r and not box, self_r)
+        second = t.review(code, dict(ctx2))
+        check("第二位白名单管理员复核后真执行", second.startswith("已完成") and len(box) == 1, second)
+        evs = [(e.get("kind"), e.get("detail"), e.get("user")) for e in audit_events(base)]
+        h = lambda u: hashlib.sha256(u.encode("utf-8")).hexdigest()[:8]  # 审计不留人编号，只留哈希
+        check("审计链 dual first → dual second → write_done",
+              ("write_confirmed", "dual first", h("user_jc")) in evs
+              and ("write_confirmed", "dual second", h("user_jc2")) in evs
+              and any(k == "write_done" and u == h("user_jc2") for k, _d, u in evs), evs)
+        replay = t.review(code, dict(ctx2))
+        check("复核后码失效不重放", "无效或已过期" in replay and len(box) == 1, replay)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    base, t, box = fresh()
+    try:
+        t.propose_write("docs_create", {"title": "重要变更", "markdown": "内容"}, dict(CTX))
+        code = next(iter(t.pending))
+        check("取消不挡（发起人可直接取消）", t.confirm(code, dict(CTX), cancel=True) == "已取消。")
+        check("取消后无写入", not [e for e in audit_events(base) if e.get("kind") == "write_done"])
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    base, t, box = fresh()
+    try:
+        t.propose_write("docs_create", {"title": "重要变更", "markdown": "内容"}, dict(CTX))
+        code = next(iter(t.pending))
+        t.confirm(code, dict(CTX))
+        outsider = t.review(code, dict(CTX, user="user_out", message_id="om_out_0001"))
+        denied = [e for e in audit_events(base) if e.get("kind") == "write_denied"]
+        check("复核人不在白名单被拒并留痕", "白名单" in outsider and denied
+              and denied[0].get("user") == hashlib.sha256("user_out".encode("utf-8")).hexdigest()[:8], outsider)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    base, t = new_tools({"docs_create": {"enabled": True}}, write_cfg())
+    t.fake = lambda argv: {"ok": True, "data": {"url": "u"}}
+    try:
+        t.propose_write("docs_create", {"title": "普通变更", "markdown": "内容"}, dict(CTX))
+        code = next(iter(t.pending))
+        said = t.review(code, dict(CTX))
+        check("非 dual 提案复核指路到确认码", "不需要复核" in said and "确认" in said, said)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    pat = confirm_mode.confirm_pattern({"confirm": {"code_digits": 6}})
+    m = pat.match("复核 123456")
+    check("复核命令进确认命令正则（直接命令、不调模型）",
+          bool(m) and m.group(1) == "复核" and m.group(2) == "123456" and not pat.match("确认复核 123456"))
 
 
 def run_freeze(base, since=None):
@@ -524,6 +603,7 @@ test_decision_gate_routes()
 test_evidence_replay()
 test_receipt_verify()
 test_gate_wrapper()
+test_dual_review()
 test_statics()
 test_freeze_chain()
 test_e2e_production_gate()

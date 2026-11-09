@@ -351,7 +351,7 @@ python checks/check_config.py agents/example.json
 | `base_time_field` | 加记录时，如果没有这一列，就自动填上当前时间。不需要就改成 `""`。 |
 | `base_select_fields` | 飞书里的单选列。程序会把纯文字包成列表再写入，否则飞书会报格式错误。例子里是「状态」。你的表没有单选列就改成 `[]`。 |
 | `max_batch` | 一次批量建日程最多几条。默认 `10`。 |
-| `decision_gate` | 写提案决策门禁（juchang-decision-gate），默认关。`enabled: true` 并在 `tools` 里声明哪些写工具过门禁、各是什么等级（如 `"docs_create": "L2"`，只能是 L1/L2/L3；写错时该写动作被拒绝，宁可挡住也不猜）。propose 阶段自动过门：`blocked` 拒绝提案并说明依据，`manual_only` 拒绝代做（提示人工操作），其余放行进既有确认流——门禁只能加严不能放宽，`automatic` 仍需发起人确认。证据状态优先取本会话近期 `evidencegate_check` 的路由，没有或过期用 `evidence_default`（默认 `sufficient`，`evidence_window_sec` 默认 900）；来源连同等级、路由、审批模式一起写进审计。没在 `tools` 里点名的写工具不过门禁；不想过门就删掉整个 `decision_gate` 段，行为回到从前。 |
+| `decision_gate` | 写提案决策门禁（juchang-decision-gate），默认关。`enabled: true` 并在 `tools` 里声明哪些写工具过门禁、各是什么等级（如 `"docs_create": "L2"`，只能是 L1/L2/L3；写错时该写动作被拒绝，宁可挡住也不猜）。propose 阶段自动过门：`blocked` 拒绝提案并说明依据，`manual_only` 拒绝代做（提示人工操作），其余放行进既有确认流——门禁只能加严不能放宽，`automatic` 仍需发起人确认。证据状态优先取本会话近期 `evidencegate_check` 的路由，没有或过期用 `evidence_default`（默认 `sufficient`，`evidence_window_sec` 默认 900）；来源连同等级、路由、审批模式一起写进审计。没在 `tools` 里点名的写工具不过门禁；不想过门就删掉整个 `decision_gate` 段，行为回到从前。路由给出 `approval: dual`（critical 影响的动作常见）时启用双人复核：发起人回复「确认 码」只记下不执行，需另一位写入白名单管理员在同一会话内回复「复核 码」才真正执行；发起人自己复核不算，复核人不在白名单被拒并留痕，取消不挡（发起人随时可「取消 码」）。复核码与确认码共用同一套时效与一次性约束，审计链依次落 `write_confirmed`（dual first / dual second）与 `write_done`。 |
 
 这些编号都不是密钥，但它们指向你的真实文档和表。不要把填好的配置发到公开的地方。
 
