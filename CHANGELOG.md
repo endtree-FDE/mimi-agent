@@ -17,6 +17,7 @@
 - 决策门禁 L2 运维口径（幕幕与 Mimi 相同）：写提案门禁只挂 `docs_create` 与 `base_create`，等级都是字符串 `L2`；不挂 `calendar_create`、`docs_append`、`memory_propose`，也不把 `impact` 写成 `critical`（那才会走到上面的双人复核）。怎么开、删掉 `write.decision_gate` 整段回滚、和确认码白名单的关系、试跑时看审计，写在 [agents/CONFIG.md](agents/CONFIG.md) 与 [docs/决策门禁对照与接入方案.md](docs/决策门禁对照与接入方案.md)。示例配置收到这两项，`enabled` 仍是 `false`。
 - `--doctor` 增加四行只读结果：进程在跑、正在停还是已停（`service`），最近一次成功应答的时间（`last_ok`），最近一条失败的一句话（`last_fail`，不打堆栈），以及通过、警告、失败项名单（`checklist`）。读的是已有的锁、心跳、停机请求和本机日志；没有记录就直接说没有。不发消息，不写心跳，没在跑本身也不判失败。
 - 固定问答回归：`evals/fixtures/golden` 放脱敏假会话和假工具结果，`python checks/eval_smoke.py` 断言拒答、需确认和只读成功。不连飞书、不调模型，也不改默认外发。见 [docs/回归测试.md](docs/回归测试.md)。
+- 复核值班表 `write.review_roster`，默认关。打开后，门禁 dual 的第二位必须是当前时段值班、并且也在写入白名单里的另一位管理员；没配或 `enabled` 不是 true 时，仍是白名单里任意另一位，行为与现在相同。值班表不能把白名单外的人放进来，也不把日常 L2 抬成 dual，确认不能关。回滚：`enabled` 改回 false 或删掉整段。见 [agents/CONFIG.md](agents/CONFIG.md) 的「复核值班表」。
 
 ### 修复
 

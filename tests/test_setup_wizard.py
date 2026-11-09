@@ -131,7 +131,8 @@ def test_write_and_repeat():
               and cfg.get("knowledge", {}).get("enabled") is False
               and cfg.get("memory", {}).get("enabled") is False
               and cfg.get("memory", {}).get("growth", {}).get("enabled") is False
-              and cfg.get("skills", {}).get("enabled") is False and cfg.get("progress", {}).get("enabled") is False)
+              and cfg.get("skills", {}).get("enabled") is False and cfg.get("progress", {}).get("enabled") is False
+              and (cfg.get("write") or {}).get("review_roster", {}).get("enabled") is False)
         check("私聊不放开，写入只有主人",
               cfg.get("p2p", {}).get("allow_group_members") is False and cfg.get("p2p", {}).get("open_to_all") is False
               and cfg.get("p2p", {}).get("allow_open_ids") == []

@@ -1,7 +1,7 @@
 # juchang 三门测试：决策门禁（工具 + 写提案包裹）、证据回放核对、Matrix 回执核验。
 # 脚本零依赖（node 内置），测试里真跑 node：实例机 v24、CI runner 都预装。
 # 上游 route-gate 测试（16 条）也在本文件里跑一遍，证明机械移植的行为等价性。
-import datetime, hashlib, json, logging, os, shutil, subprocess, sys, tempfile, time
+import datetime, hashlib, json, logging, os, re, shutil, subprocess, sys, tempfile, time
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, FW)
@@ -398,6 +398,8 @@ def test_statics():
           and dg.get("tools") == {"docs_create": "L2", "base_create": "L2"}
           and dg.get("evidence_window_sec") == 900
           and dg.get("evidence_default") == "sufficient", dg)
+    rr = (EXAMPLE.get("write") or {}).get("review_roster") or {}
+    check("示例里复核值班表默认关", rr.get("enabled") is False, rr)
 
 
 # ---------- ⑧ 零写入冻结导出器 + 端到端复检（生产配置） ----------
@@ -444,6 +446,7 @@ def test_dual_review():
         out = t.propose_write("docs_create", {"title": "重要变更", "markdown": "内容"}, dict(CTX))
         code, rec = next(iter(t.pending.items()))
         check("dual 提案带 dual 标记且文案写清两步", rec.get("dual") is True and "双人复核" in out and "另一位管理员" in out, rec)
+        check("未配值班表时文案不提值班", "值班" not in out, out)
         early = t.review(code, dict(ctx2))
         check("第一位没确认前复核被挡", "还没到复核步骤" in early and not box, early)
         first = t.confirm(code, dict(CTX))
@@ -498,6 +501,159 @@ def test_dual_review():
     m = pat.match("复核 123456")
     check("复核命令进确认命令正则（直接命令、不调模型）",
           bool(m) and m.group(1) == "复核" and m.group(2) == "123456" and not pat.match("确认复核 123456"))
+
+
+def test_review_roster():
+    """值班表默认关。打开后只收窄第二位：必须在当前班次且在写入白名单里。不抬日常 L2。"""
+    import review_roster
+    import checks.history_scan as hs
+    mon_10 = datetime.datetime(2026, 11, 9, 10, 0)   # 周一
+    mon_18 = datetime.datetime(2026, 11, 9, 18, 0)
+    mon_19 = datetime.datetime(2026, 11, 9, 19, 0)
+    tue_08 = datetime.datetime(2026, 11, 10, 8, 0)
+    sat_08 = datetime.datetime(2026, 11, 14, 8, 0)
+    sat_12 = datetime.datetime(2026, 11, 14, 12, 0)
+    check("样本日是周一", mon_10.isoweekday() == 1 and sat_12.isoweekday() == 6)
+    roster = {
+        "enabled": True,
+        "slots": [
+            {"weekdays": [1, 2, 3, 4, 5], "start": "09:00", "end": "18:00", "open_ids": ["user_jc2", "ou_placeholderreviewa"]},
+            {"weekdays": [1, 2, 3, 4, 5], "start": "18:00", "end": "09:00", "open_ids": ["user_jc3"]},
+        ],
+    }
+    cfg = {"write": {"review_roster": roster, "allowed_users": {
+        "user_jc": "发起管理员", "user_jc2": "白班复核", "user_jc3": "夜班复核", "user_other": "不值班的管理员"}}}
+    check("未写值班表时不限制", review_roster.on_duty_ids({}) is None and review_roster.eligible_names({}, {}) is None)
+    off = {"write": {"review_roster": {"enabled": False, "slots": roster["slots"]}}}
+    check("enabled 不是 true 时不限制", review_roster.on_duty_ids(off, mon_10) is None
+          and review_roster.on_duty_ids({"write": {"review_roster": {"enabled": "true", "slots": roster["slots"]}}}, mon_10) is None)
+    check("周一上午白班", review_roster.on_duty_ids(cfg, mon_10) == {"user_jc2", "ou_placeholderreviewa"})
+    check("18:00 整点归入夜班（end 不含）", review_roster.on_duty_ids(cfg, mon_18) == {"user_jc3"})
+    check("周一晚间夜班", review_roster.on_duty_ids(cfg, mon_19) == {"user_jc3"})
+    check("跨夜班的次日早晨仍算前一天", review_roster.on_duty_ids(cfg, tue_08) == {"user_jc3"}
+          and review_roster.on_duty_ids(cfg, sat_08) == {"user_jc3"})
+    check("周末中午没有班次", review_roster.on_duty_ids(cfg, sat_12) == set())
+    check("时区写错时无人值班", review_roster.on_duty_ids(
+        {"write": {"review_roster": {"enabled": True, "utc_offset_hours": "东八区", "slots": roster["slots"]}}}, mon_10) == set())
+    bad_slot = {"write": {"review_roster": {"enabled": True, "slots": [
+        {"weekdays": [1], "start": "bad", "end": "18:00", "open_ids": ["user_bad"]},
+        {"weekdays": ["周一"], "start": "09:00", "end": "09:00", "open_ids": ["user_bad"]},
+        {"weekdays": [1], "start": "09:00", "end": "18:00", "open_ids": ["user_jc2"]},
+    ]}}}
+    check("写错的班次跳过，写对的班次仍生效", review_roster.on_duty_ids(bad_slot, mon_10) == {"user_jc2"})
+    allday = {"write": {"review_roster": {"enabled": True, "slots": [
+        {"weekdays": [6, 7], "start": "00:00", "end": "24:00", "open_ids": ["user_jc2"]}]}}}
+    check("00:00 到 24:00 覆盖整天", review_roster.on_duty_ids(allday, sat_12) == {"user_jc2"}
+          and review_roster.on_duty_ids(allday, mon_10) == set())
+    names = review_roster.eligible_names(cfg, cfg["write"]["allowed_users"], mon_10)
+    check("称呼只列白名单里的值班人，不写编号", names == ["白班复核"] and "ou_" not in "".join(names), names)
+    ex = json.load(open(os.path.join(FW, "agents", "example.json"), encoding="utf-8-sig"))
+    ids = [x for slot in ((ex.get("write") or {}).get("review_roster") or {}).get("slots") or [] for x in (slot.get("open_ids") or [])]
+    pat = re.compile(hs.PATTERNS["open_id"])
+    check("示例值班表占位编号像 open_id，且过 history_scan 白名单",
+          ids and all(pat.search(x) and hs.fixture("open_id", x, "agents/example.json") for x in ids), ids)
+
+    users = {"user_jc": "发起管理员", "user_jc2": "白班复核", "user_jc3": "夜班复核", "user_other": "不值班的管理员"}
+    dg = {"enabled": True, "tools": {"docs_create": {"level": "L2", "impact": "critical"}}}
+
+    def fresh(extra_roster, when):
+        w = write_cfg(dg, users=users)
+        w["review_roster"] = extra_roster
+        base, t = new_tools({"docs_create": {"enabled": True}}, w)
+        box = []
+        t.fake = lambda argv: box.append(list(argv)) or {"ok": True, "data": {"url": "https://example.com/docx/NEW"}}
+        t.roster_now = when
+        return base, t, box
+
+    base, t, box = fresh(roster, mon_10)
+    ctx2 = dict(CTX, user="user_jc2", message_id="om_jc2_0001")
+    ctx3 = dict(CTX, user="user_jc3", message_id="om_jc3_0001")
+    ctx_other = dict(CTX, user="user_other", message_id="om_other_0001")
+    try:
+        out = t.propose_write("docs_create", {"title": "重要变更", "markdown": "内容"}, dict(CTX))
+        code = next(iter(t.pending))
+        check("值班表开着时提案点出当前值班称呼且不写编号",
+              "双人复核" in out and "当前值班：白班复核" in out and "ou_placeholderreviewa" not in out and "user_jc2" not in out, out)
+        t.confirm(code, dict(CTX))
+        early = t.review(code, dict(ctx_other))
+        check("白名单里但不在班次上的人复核被拒且不消耗码",
+              "值班表" in early and code in t.pending and not box, early)
+        t.roster_now = mon_19
+        moved = t.review(code, dict(ctx2))
+        check("复核按当时的班次，上午的人到了晚上不算", "值班表" in moved and code in t.pending and not box, moved)
+        second = t.review(code, dict(ctx3))
+        evs = [(e.get("kind"), e.get("detail"), e.get("err")) for e in audit_events(base)]
+        check("夜班管理员复核后才执行", second.startswith("已完成") and len(box) == 1, second)
+        check("不在班次的拒绝留痕，成功的第二步仍是 dual second",
+              any(k == "write_denied" and err == "reviewer not on duty" for k, _d, err in evs)
+              and any(k == "write_confirmed" and d == "dual second" for k, d, _e in evs), evs)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    base, t, box = fresh(roster, sat_12)
+    try:
+        out = t.propose_write("docs_create", {"title": "周末变更", "markdown": "内容"}, dict(CTX))
+        code = next(iter(t.pending))
+        check("没有班次时提案说明无法执行", "没有可复核的值班人" in out, out)
+        t.confirm(code, dict(CTX))
+        blocked = t.review(code, dict(ctx2))
+        check("没有合格值班人时不执行", "没有可复核的值班人" in blocked and not box and code in t.pending, blocked)
+        check("取消仍然只归发起人", t.confirm(code, dict(CTX), cancel=True) == "已取消。" and not box)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    on_roster = dict(roster)
+    on_roster["slots"] = [{"weekdays": [1, 2, 3, 4, 5], "start": "09:00", "end": "18:00",
+                           "open_ids": ["user_jc", "user_jc2", "user_out"]}]
+    base, t, box = fresh(on_roster, mon_10)
+    try:
+        t.propose_write("docs_create", {"title": "重要变更", "markdown": "内容"}, dict(CTX))
+        code = next(iter(t.pending))
+        t.confirm(code, dict(CTX))
+        self_r = t.review(code, dict(CTX))
+        outsider = t.review(code, dict(CTX, user="user_out", message_id="om_out_0001"))
+        check("发起人在班次上也不能自己复核", "另一位管理员" in self_r and code in t.pending, self_r)
+        check("只在值班表不在白名单仍按白名单拒绝", "白名单" in outsider and code in t.pending, outsider)
+        done = t.review(code, dict(ctx2))
+        check("班次上的另一位白名单管理员可以复核", done.startswith("已完成") and len(box) == 1, done)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    base, t, box = fresh({"enabled": False, "slots": roster["slots"]}, mon_10)
+    try:
+        out = t.propose_write("docs_create", {"title": "重要变更", "markdown": "内容"}, dict(CTX))
+        code = next(iter(t.pending))
+        check("值班表关掉时提案不提值班", "值班" not in out and "双人复核" in out, out)
+        t.confirm(code, dict(CTX))
+        done = t.review(code, dict(ctx_other))
+        check("值班表关掉时任意另一位白名单管理员都能复核", done.startswith("已完成") and len(box) == 1, done)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    base, t, box = fresh({"enabled": True, "utc_offset_hours": 99, "slots": roster["slots"]}, mon_10)
+    try:
+        t.propose_write("docs_create", {"title": "重要变更", "markdown": "内容"}, dict(CTX))
+        code = next(iter(t.pending))
+        t.confirm(code, dict(CTX))
+        blocked = t.review(code, dict(ctx2))
+        check("时区写错时不退回随便一位", "没有可复核的值班人" in blocked and not box, blocked)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    w = write_cfg({"enabled": True, "tools": {"docs_create": "L2"}}, users=users)
+    w["review_roster"] = roster
+    base, t = new_tools({"docs_create": {"enabled": True}}, w)
+    box = []
+    t.fake = lambda argv: box.append(list(argv)) or {"ok": True, "data": {"url": "https://example.com/docx/NEW"}}
+    t.roster_now = mon_10
+    try:
+        out = t.propose_write("docs_create", {"title": "普通变更", "markdown": "内容"}, dict(CTX))
+        code, rec = next(iter(t.pending.items()))
+        check("值班表开着也不把日常 L2 抬成 dual", rec.get("dual") is not True and "双人复核" not in out and "值班" not in out, out)
+        done = t.confirm(code, dict(CTX))
+        check("日常 L2 仍是发起人单人确认就执行", str(done).startswith("已完成") and len(box) == 1, done)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def run_freeze(base, since=None):
@@ -608,6 +764,7 @@ test_evidence_replay()
 test_receipt_verify()
 test_gate_wrapper()
 test_dual_review()
+test_review_roster()
 test_statics()
 test_freeze_chain()
 test_e2e_production_gate()

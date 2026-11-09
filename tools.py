@@ -1,6 +1,6 @@
 # 工具层：只允许白名单内的 lark-cli 命令，统一 --as bot；写操作要确认；全部写审计日志；缺权限优雅降级。
 import json, os, re, sqlite3, subprocess, struct, tempfile, time, random, threading, datetime, glob, shutil, zipfile
-import confirm_mode, guard, skills, usage
+import confirm_mode, guard, review_roster, skills, usage
 from channels.base import TOOL_CAPS
 
 def run_capture(cmd, cwd=None, timeout=60):
@@ -1017,6 +1017,7 @@ class Tools:
                 out = "将要执行：%s\n请发起人在 %d 分钟内 @我 回复「确认 %s」执行，或「取消 %s」。" % (summary, minutes, code, code)
             if gate and gate.get("approval") == "dual":
                 out += "\n决策门禁：这个动作按门禁需双人复核；发起人回复「确认 %s」后，还需另一位管理员本会话回复「复核 %s」才会执行，只有一位确认不会动任何数据。" % (code, code)
+                out += self._roster_line()
             return out
         shown = summary if not memory_text else ("记入本群记忆：" + memory_text[:200])
         text = confirm_mode.button_text(guard.redact(shown, self.names), rec["impact"], plan["mode"], code, plan["ttl"])
@@ -1027,6 +1028,7 @@ class Tools:
             text += "\n没点确认之前，不要把它当成已经记住。"
         if gate and gate.get("approval") == "dual":
             text += "\n决策门禁：这个动作按门禁需双人复核；机器人只执行单人确认流，另一位管理员请直接跟帖复核。"
+            text += self._roster_line()
         card = confirm_mode.build_card(text, plan["token"], ah)
         self._arm_card({"card": card, "token": plan["token"]})
         return text
@@ -1331,14 +1333,26 @@ class Tools:
                 left = max(1, int((float(p.get("expires") or time.time()) - time.time()) // 60))
                 self.audit(kind="write_confirmed", tool=p.get("tool"), user=ctx["user"], chat=ctx.get("chat_id"),
                            code=code, token=p.get("token") or "", summary=p.get("summary"), detail="dual first")
-                return "第一位确认已记下。请另一位管理员在 %d 分钟内本会话回复「复核 %s」才会执行；只有一位确认不会动任何数据。" % (left, code)
+                return ("第一位确认已记下。请另一位管理员在 %d 分钟内本会话回复「复核 %s」才会执行；只有一位确认不会动任何数据。" % (left, code)) + self._roster_line()
             if not self._mark_used(code, p.get("token") or ""): return "确认没能记下，请稍后再试。"
             self.pending.pop(code, None); self._drop_pending(code)
         return self._finish_write(p, ctx, code, cancel)
 
+    def _roster_line(self):
+        """值班表没开时返回空串，提案和确认的句子与从前相同。开着时只追加称呼，不写编号。
+        测试可设 roster_now 固定时钟；正式运行不设，用本机时间或 utc_offset_hours。"""
+        names = review_roster.eligible_names(self.cfg, self.w.get("allowed_users") or {},
+                                             now=getattr(self, "roster_now", None))
+        if names is None:
+            return ""
+        if names:
+            return "\n复核人还须是当前值班、并且也在写入白名单里的另一位管理员。当前值班：%s。" % "、".join(names)
+        return "\n复核人还须是当前值班、并且也在写入白名单里的另一位管理员。当前没有可复核的值班人，确认后也无法执行。"
+
     def review(self, code, ctx):
         """门禁双人复核的第二步：发起人确认后，另一位白名单管理员在本会话回复「复核 码」才执行。
-        复核独立于 confirm()——那里被同发起人校验挡住，第二人永远进不来；取消仍只归发起人。"""
+        复核独立于 confirm()——那里被同发起人校验挡住，第二人永远进不来；取消仍只归发起人。
+        review_roster 启用时再收窄到当前班次；没启用不看值班表。"""
         ctx = ctx or {}
         if not _actor_ok(ctx) or not _ACTOR_RX.match(str(ctx.get("message_id") or "")):
             return "不能复核：缺少发送人或原消息。"
@@ -1357,6 +1371,19 @@ class Tools:
                 self.audit(kind="write_denied", tool=p.get("tool"), user=ctx.get("user"), chat=ctx.get("chat_id"),
                            code=code, err="reviewer not allowed")
                 return "复核需要写入白名单里的管理员，你不在名单上。"
+            # 白名单是资格，值班表只在资格之内收窄。先报「不在白名单」，避免值班表变成另一道入口。
+            duty = review_roster.eligible_ids(self.cfg, self.w.get("allowed_users") or {},
+                                              now=getattr(self, "roster_now", None))
+            if duty is not None and ctx.get("user") not in duty:
+                if duty:
+                    err = "reviewer not on duty"
+                    said = "复核需要当前值班的另一位管理员。你不在这个时段的值班表上，没有执行。"
+                else:
+                    err = "no reviewer on duty"
+                    said = "这个时段没有可复核的值班人（值班表上的人还必须在写入白名单里），没有执行。发起人可以回复「取消 %s」。" % code
+                self.audit(kind="write_denied", tool=p.get("tool"), user=ctx.get("user"), chat=ctx.get("chat_id"),
+                           code=code, err=err)
+                return said
             if not self._mark_used(code, p.get("token") or ""): return "确认没能记下，请稍后再试。"
             self.pending.pop(code, None); self._drop_pending(code)
             self.audit(kind="write_confirmed", tool=p.get("tool"), user=ctx.get("user"), chat=ctx.get("chat_id"),
@@ -1409,6 +1436,7 @@ class Tools:
                 self.audit(kind="write_confirmed", tool=p.get("tool"), user=ctx["user"], chat=ctx.get("chat_id"),
                            code=code, token=p.get("token") or "", summary=p.get("summary"), detail="dual first")
                 text = "第一位确认已记下。请另一位管理员在 %d 分钟内本会话回复「复核 %s」才会执行。" % (left, code)
+                text += self._roster_line()
                 return {"text": text, "card": confirm_mode.done_card("还差复核", text), "patch": True, "ok": False}
             if not self._mark_used(code, token):
                 return {"text": "确认没能记下，请稍后再试。", "card": None, "patch": False, "ok": False}

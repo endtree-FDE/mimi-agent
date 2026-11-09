@@ -557,6 +557,12 @@ _ex_sk = _ex_cfg.get("skills") or {}
 check("配置示例的技能开关仍是关闭，only 仍是空数组",
       _ex_sk.get("enabled") is False and _ex_sk.get("only") == [] and _ex_sk.get("index_budget_chars") == 900,
       str(_ex_sk))
+_ex_rr = (_ex_cfg.get("write") or {}).get("review_roster") or {}
+_ex_dg = (_ex_cfg.get("write") or {}).get("decision_gate") or {}
+check("示例复核值班表默认关，写提案门禁仍关且只声明 docs_create 与 base_create 为 L2",
+      _ex_rr.get("enabled") is False and _ex_dg.get("enabled") is False
+      and (_ex_dg.get("tools") or {}) == {"docs_create": "L2", "base_create": "L2"},
+      str(_ex_rr.get("enabled")))
 _inline, _ibody, _ierr = _sk.parse_skill('---\nname: demo-skill\ndescription: 演示触发词。\ntriggers: ["进度表", 纪要]\n---\n\n步骤。\n')
 _block, _bbody, _berr = _sk.parse_skill("---\nname: demo-skill\ndescription: 演示触发词。\ntriggers:\n  - 进度表\n  - 纪要\n---\n\n步骤。\n")
 check("triggers：一行列表和缩进列表都能解析",
