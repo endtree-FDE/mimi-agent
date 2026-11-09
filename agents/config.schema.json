@@ -422,6 +422,27 @@
           "type": "boolean",
           "description": "不写或 true：超字数预算丢掉旧对话时，在提示词里注明省略了几条。false 则静默丢掉。"
         },
+        "compress": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "按话题做短窗摘要。不写或 enabled 为 false 时，短期窗口与以前相同，不调用模型。",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "keep_turns": {"type": "integer", "minimum": 0},
+            "trigger_turns": {"type": "integer", "minimum": 0},
+            "lookback_turns": {"type": "integer", "minimum": 0},
+            "max_summary_chars": {"type": "integer", "minimum": 0},
+            "keep_tools": {"type": "boolean"}
+          }
+        },
+        "explicit_scope": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "长期记忆写入带群、用户或会话范围。不写或 enabled 为 false 时，「记一下」仍只记本群。读取始终丢掉指向别的群的 scope。",
+          "properties": {
+            "enabled": {"type": "boolean"}
+          }
+        },
         "growth": {
           "type": "object",
           "additionalProperties": true,

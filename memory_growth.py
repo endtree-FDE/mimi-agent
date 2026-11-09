@@ -832,7 +832,8 @@ def handle_text(cfg, base, gmem, q, ctx, names, now=None):
         return decide(base, gmem, "approve", forget_ok.group(1), ctx, now=now, names=names, rules=rules, cfg=cfg)
     search = _SEARCH_RX.match(q)
     if search:
-        return gmem.search(ctx.get("chat_id"), ctx.get("chat_type"), search.group(1) or "")
+        return gmem.search(ctx.get("chat_id"), ctx.get("chat_type"), search.group(1) or "",
+                           user=str(ctx.get("user") or ""), session=str(ctx.get("thread") or ""))
     if not enabled(cfg) or not memory.FORGET_RX.match(q):
         return None
     return _ask_forget(cfg, base, gmem, q, ctx, now)
