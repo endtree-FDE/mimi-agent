@@ -15,7 +15,7 @@ import json, os, re, subprocess, sys, time, logging, collections, threading, sql
 
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import utf8io  # 管道上的标准流改为 UTF-8，避免中文 Windows 的代码页把日志解崩
-import acp_client, calltrace, broadcast, channels, crew, digest, feishu_link, guard, health_alert, intake, intake_notify, knowledge, lifecycle, memory, memory_growth, observe, proc_identity, providers, retrospect, skill_evolve, usage
+import acp_client, calltrace, broadcast, channels, crew, digest, feishu_link, gates_status, guard, health_alert, intake, intake_notify, knowledge, lifecycle, memory, memory_growth, observe, proc_identity, providers, retrospect, skill_evolve, usage
 import confirm_mode, feature_switch
 from channels.base import Cap, can_update, status_modes
 from channels.feishu import MEMBER_ADDED, MEMBER_DELETED
@@ -309,6 +309,10 @@ def status_text(sess, chat_id=""):
         "技能：%s。" % skill_bit,
         "写入：%s。写操作要白名单和 6 位确认码，不会邀请别人。" % ("开" if write_on else "关"),
     ]
+    # 门禁默认关（三个门全关时不加这一行，正文和以前一样）。开着时给一行状态与最近 7 天的拦截计数。
+    gates_line = gates_status.status_line(CFG, BASE)
+    if gates_line:
+        lines.append(gates_line)
     # 这几项都默认关。没打开时不加对应的那行，只有三项定时输出全关时多一行说明，免得看成漏写。
     if health_alert.settings(CFG)["enabled"]:
         lines.append("断线提醒：开。长连接断开时用发送接口通知主人，不依赖那条长连接。")

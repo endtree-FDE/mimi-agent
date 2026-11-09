@@ -315,6 +315,9 @@ python checks/check_config.py agents/example.json
 | `attachment` | 下载图片和文件。`max_mb` 是单文件上限，默认 20。`max_chars` 是提取出的正文最多多少字，没写时跟 `agent.body_max_chars`（默认 `20000`）。能读：纯文本（txt、md、csv、json、log 等）、常见代码文件、PDF、`.docx`、`.pptx`、图片（png、jpg、gif、webp、bmp，要开 `features.vision`）。`.docx` 和 `.pptx` 只用标准库。PDF 需要 `pypdf`，按页抽文字；没装会说明请安装或另存成文本。某一页没有文字时，会抽出前 `pdf_scan_pages`（不写时是 10；配置里写了 3 就仍是 3）页里内嵌的 JPG、PNG 或 BMP 交给模型看，张数不超过 `pdf_max_images`（不写时是 3）。发给模型的说明写的是这个实际张数，不另写死一个数字。抽不出就请对方把那一页导出成图片。不渲染整页，也不需要 Poppler。`.xlsx` 在装了 `openpyxl` 时读取，没装会说明读不了，并建议另存 CSV。旧格式 `.doc`、`.ppt`、`.xls` 会请对方另存为对应的新格式。zip 会先列目录，再读取其中支持的文件；默认最多列出 `zip_max_files`（30）项、读取 `zip_max_read`（8）个，解压总体积不超过 `zip_max_mb`（40）。路径里带 `..`、绝对路径、压缩比异常或内层 zip 都会跳过。音频和视频只说明类型，不听不看。下载后的文件会尽量改成消息里的原文件名，而不是 `file_key`。这些上限没写进配置时用括号里的默认值。 |
 | `message_attachment` | 读取当前会话里历史消息的附件。可以传一个 `message_id`，也可以传 `message_ids` 列表。列表里的每一条都单独核对会话和时间，结果分开标注；某一条对不上不影响其他条，也不会下载那一条。下载前和下载后都会核对消息编号和会话。模型只能用本群历史里给出的消息编号。没写这项时，跟着 `attachment.enabled`。写了 `enabled` 就以写的为准。`max_per_answer` 不写是 `4`，限制的是读进这一次回答的文件数。同一轮里的多条只读调用按写出的顺序逐个执行。 |
 | `kb_read` | 按相对路径读取知识库里的 md 或 txt。不写这项时可以读。写成 `{"enabled": false}` 就关掉。`max_chars` 默认 `8000`。跳不出知识库目录。 |
+| `evidencegate_check` | EvidenceGate 门禁：校验文档 AI（OCR）输出，返回三路由（ACCEPT_CANDIDATE / HUMAN_REVIEW / MODEL_OUTPUT_INVALID）与字段证据。默认关，`enabled: true` 才可用。可选 `schema` 换门禁契约 JSON 的实例内相对路径，`node` 换 Node 可执行文件。只读，不改业务。见 skills/evidencegate-ocr/SKILL.md。 |
+| `decision_gate_check` | juchang 决策门禁查询：按「证据状态×动作等级×可逆性」算出写动作的路由（automatic / after_approval / manual_only / blocked）与理由。默认关。只读，分数只排先后不给许可。脚本固定在 skills/juchang-decision-gate/scripts/。 |
+| `receipt_verify` | Matrix 回执核验：离线校验 caller 提供的 accepted@2 导出，结果只证明内部一致，不证明来源真实。默认关，且只对 Matrix 生态的导出有用。 |
 | `web` | 只影响常驻模式里「打开网页」。`allow_fake_ip_ranges` 默认 `["198.18.0.0/15"]`。Clash 这类假 IP 代理会把公网域名解析到这个段。用域名访问、并且两次解析都落在这段里时放行。网址里直接写 `198.18.x` 仍然拒绝。`127/8`、`10/8`、`172.16/12`、`192.168/16`、`169.254/16`、`100.64/10`、`::1` 一律拒绝，写进这个列表也不放行。跳转每一跳都按同一规则检查。没写 `web` 时也是这个默认。写成 `[]` 或 `false` 就连假 IP 段也不放行。 |
 | `docs_create` | 在专用文件夹新建文档。要确认码。 |
 | `docs_append` | 在白名单文档末尾追加。要确认码。 |
@@ -348,6 +351,7 @@ python checks/check_config.py agents/example.json
 | `base_time_field` | 加记录时，如果没有这一列，就自动填上当前时间。不需要就改成 `""`。 |
 | `base_select_fields` | 飞书里的单选列。程序会把纯文字包成列表再写入，否则飞书会报格式错误。例子里是「状态」。你的表没有单选列就改成 `[]`。 |
 | `max_batch` | 一次批量建日程最多几条。默认 `10`。 |
+| `decision_gate` | 写提案决策门禁（juchang-decision-gate），默认关。`enabled: true` 并在 `tools` 里声明哪些写工具过门禁、各是什么等级（如 `"docs_create": "L2"`，只能是 L1/L2/L3；写错时该写动作被拒绝，宁可挡住也不猜）。propose 阶段自动过门：`blocked` 拒绝提案并说明依据，`manual_only` 拒绝代做（提示人工操作），其余放行进既有确认流——门禁只能加严不能放宽，`automatic` 仍需发起人确认。证据状态优先取本会话近期 `evidencegate_check` 的路由，没有或过期用 `evidence_default`（默认 `sufficient`，`evidence_window_sec` 默认 900）；来源连同等级、路由、审批模式一起写进审计。没在 `tools` 里点名的写工具不过门禁；不想过门就删掉整个 `decision_gate` 段，行为回到从前。 |
 
 这些编号都不是密钥，但它们指向你的真实文档和表。不要把填好的配置发到公开的地方。
 
@@ -656,3 +660,5 @@ python checks/check_config.py agents/example.json
 `dry_run_live_reads`：演练时要不要真的去读飞书。默认 `false`，演练只在屏幕上打印命令，不发消息。不要为了省事改成 `true`，除非你知道自己在演练、并且只读。
 
 写操作在演练里默认也不真的执行。只有你本人在环境变量里打开 `AGENTBOT_DRY_LIVE_WRITES=1` 时才会真的写。验收时才这么做，并且用单独的测试表。
+
+> AI生成
