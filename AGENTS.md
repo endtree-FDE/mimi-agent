@@ -23,7 +23,7 @@
 - `acp_client.py` — 可选常驻模式（`agent.mode=acp`，默认 oneshot，Cursor 只启动一次）。
 - `tools.py` — 飞书只读工具与需确认的写入。
 - `confirm_mode.py` — 写入确认；`guard.py` — 脱敏与话题红线；`utf8io.py` — 管道强制 UTF-8。
-- `memory.py` — 按群长期记忆；`memory_growth.py` / `retrospect.py` / `skill_evolve.py` /
+- `memory.py` — 按群长期记忆；`memory_window.py` — 短窗摘要与显式 scope（都默认关）；`memory_growth.py` / `retrospect.py` / `skill_evolve.py` /
   `crew.py` — 默认关闭的增强功能（写入都要审批确认）。
 - `skills.py` + `skills/*/SKILL.md` — 技能目录与触发词，默认关。其中据场三门
   （juchang-decision-gate / juchang-evidence-replay / matrix-receipt-verifier）与

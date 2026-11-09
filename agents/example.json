@@ -129,6 +129,17 @@
     "trim_note": true,
     "ttl_hours": 24,
     "per_user": false,
+    "compress": {
+      "enabled": false,
+      "keep_turns": 4,
+      "trigger_turns": 8,
+      "lookback_turns": 24,
+      "max_summary_chars": 600,
+      "keep_tools": false
+    },
+    "explicit_scope": {
+      "enabled": false
+    },
     "growth": {
       "enabled": false,
       "approver_open_ids": [],
