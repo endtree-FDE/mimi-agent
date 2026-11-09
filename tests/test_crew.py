@@ -87,6 +87,32 @@ stopped = crew.run(one, "请查资料并且写一段说明", {}, complete, run_t
 check("总轮数用完就用已有材料收束，不再汇总调用",
       "预算用完" in stopped and "总轮数" in stopped, stopped[:400])
 
+long_calls = []
+
+
+def long_complete(prompt):
+    long_calls.append(prompt)
+    if "工具结果" not in prompt and prompt.startswith("你是专员"):
+        lines = "\n".join('<<TOOL>>{"tool":"web_search","query":"q%d"}' % i for i in range(6))
+        return lines
+    if prompt.startswith("你是主理人"):
+        return "收好了"
+    return "专员说完了"
+
+
+def long_tool(name, args, ctx):
+    return "乙" * 900, False
+
+
+long_cfg = {"agent": {"crew": {"enabled": True, "step_rounds": 2, "total_rounds": 4}}}
+crew.run(long_cfg, "请查资料并且写一段说明", {}, long_complete, long_tool, names=[NAME])
+_read = next((p for p in long_calls if "工具 web_search：乙" in p), "")
+_deny = next((p for p in long_calls if "这个专员不能做这件事" in p), "")
+check("专员写进上下文的工具结果超长或超过四条时注明已截断",
+      _read.count("工具 web_search：乙") == 4 and "已截断" in _read
+      and _deny.count("这个专员不能做这件事") == 4 and "已截断" in _deny,
+      (_read[-200:] + "\n" + _deny[-200:]))
+
 base = tempfile.mkdtemp(prefix="crew_cfg_")
 try:
     data = feature_switch.mutate({"features": {"tools": False}, "agent": {"model": "x"}}, "crew", True)

@@ -148,6 +148,13 @@ def _args(call):
     return {key: value for key, value in call.items() if key != "tool"}
 
 
+def _fit_tool(text, n=800):
+    """写进专员提示词的工具结果有字数上限。超了就截断并注明，避免把没读完的当成全文。"""
+    text = "" if text is None else str(text)
+    if n <= 0 or len(text) <= n: return text
+    note = "\n（已截断）"
+    if len(note) >= n: return "（已截断）"[:n]
+    return text[:n - len(note)].rstrip() + note
 def _tokens(prompt, out):
     pin, pout = calltrace.last_tokens()
     if pin or pout:
@@ -214,6 +221,7 @@ def run(cfg, question, ctx, complete, run_tool, on_stage=None, clock=None, names
                     notes.append("【%s】%s" % (role, spoken[:800]))
                 break
             blocks = []
+            more = len(calls) > 4
             for call in calls[:4]:
                 tool = str(call.get("tool") or "")
                 if tool in _WRITE or tool not in allow:
@@ -227,12 +235,15 @@ def run(cfg, question, ctx, complete, run_tool, on_stage=None, clock=None, names
                 if done:
                     blocks.append("工具 %s：需要确认的操作已停下，没有绕过确认。" % tool)
                     continue
-                shown = guard.redact(str(result or ""), names)
-                blocks.append("工具 %s：%s" % (tool, shown[:800]))
+                shown = _fit_tool(guard.redact(str(result or ""), names))
+                blocks.append("工具 %s：%s" % (tool, shown))
+            if more:
+                blocks.append("（已截断）")
             if not blocks:
                 break
-            notes.append("【%s】%s" % (role, "\n".join(blocks)[:800]))
-            prompt = prompt + "\n\n工具结果：\n" + "\n".join(blocks) + "\n\n请根据材料用一段话说完。不要再写入。"
+            joined = "\n".join(blocks)
+            notes.append("【%s】%s" % (role, joined if len(joined) <= 800 else _fit_tool(joined)))
+            prompt = prompt + "\n\n工具结果：\n" + joined + "\n\n请根据材料用一段话说完。不要再写入。"
         if stopped:
             break
     if not notes:

@@ -608,6 +608,16 @@
           "minimum": 0,
           "description": "多轮工具结果累积重发的字数预算。不写是 120000。超过时先压缩较早的结果，仍超就截断并注明。0 表示不设预算。"
         },
+        "tool_result_max_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "一轮写进模型上下文的工具结果最多几条。不写是 8。超出的不再放入，并注明已截断。0 表示不限条数。"
+        },
+        "tool_result_max_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "一轮工具结果写进模型上下文的 UTF-8 字节上限。不写是 393216。超出就截断并注明已截断。0 表示不按字节截。"
+        },
         "progress_heartbeat_sec": {
           "type": "number",
           "minimum": 0,
