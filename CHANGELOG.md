@@ -4,17 +4,20 @@
 
 设置卡片会读取 `VERSION` 来显示版本号。读不到，或不是 `x.y.z` 这种写法时，卡片上就不写版本。删掉 `VERSION` 不影响开关本身。本文件不参与运行。删掉本文件时，机器人的行为与现在相同。
 
-当前 `VERSION` 是 `0.12.0`，发布日期是 2026-11-08。发布说明见 [docs/release-0.12.0.md](docs/release-0.12.0.md)。下面 [Unreleased] 装的是这次发版之后新攒的改动。说明里不要写密钥、群号、open_id 或客户名。
+当前 `VERSION` 是 `0.13.0`，发布日期是 2026-11-09。发布说明见 [docs/release-0.13.0.md](docs/release-0.13.0.md)。下面 [Unreleased] 装的是这次发版之后新攒的改动。说明里不要写密钥、群号、open_id 或客户名。
 
-## [Unreleased]
+## [0.13.0] - 2026-11-09
+
+发布说明见 [docs/release-0.13.0.md](docs/release-0.13.0.md)。旧配置不改也能接着跑：据场三门与写提案门禁都默认关，不写那几段行为就和 0.12.0 相同；升级后 `/状态` 会在门禁开着时多一行。
 
 ### 添加
 
-- 据场三门（juchang-skills 第一批三个成熟 Skill 的 mimi 适配版），全部默认关：`tools.decision_gate_check`（决策门禁查询——按证据状态×动作等级×可逆性算出 automatic / after_approval / manual_only / blocked 路由与理由，只算不执行）、`tools.evidence_replay_check`（证据回放核对——校验回放归档的三模式标签、哈希与缺口登记）、`tools.receipt_verify`（Matrix 回执核验——离线校验 accepted@2 导出的投影哈希、关联与因果顺序，结果只证明内部一致）。三个技能包进 `skills/`（juchang-decision-gate / juchang-evidence-replay / matrix-receipt-verifier），脚本零依赖（Node 标准库）；决策门禁公式由上游 TypeScript 机械剥类型移植，行为等价性用上游 16 条测试原样移植验证（`node --test` 全绿）。
-- 写提案决策门禁 `write.decision_gate`，默认关。打开并在 `tools` 里声明各写工具的等级（如 `"docs_create": "L2"`）后，propose 阶段自动过门：`blocked` 拒绝提案并说明依据，`manual_only` 拒绝代做（提示人工自行操作），其余放行进既有确认流——门禁只能加严不能放宽，`automatic` 在 mimi 里仍需发起人确认（确认不能关）。证据状态优先取本会话近期 `evidencegate_check` 的路由（双门联动：门一管内容可信度、门二管动作是否允许），没有或过期用配置默认；来源（`evidencegate:HUMAN_REVIEW` / `default`）连同等级、路由、审批模式一起写进 `write_proposed` / `write_blocked` 审计。等级写错时 fail closed 拒绝该写动作。回滚：配置里删掉 `decision_gate` 段即回到现状。
-- 新增 [docs/决策门禁对照与接入方案.md](docs/决策门禁对照与接入方案.md)：2026 生产级 agent 决策门禁 / 人类在环调研（LangGraph interrupt、OpenAI Agents SDK approval、Claude Code permission、CrewAI human_input）对照 juchang 三维路由的「抄什么 / 不抄什么」18 条对照表与 mimi 适配设计（含双门关系图、具名人类→确认流映射、还没做清单）。回归测试在 [tests/test_juchang.py](tests/test_juchang.py)（47 条，含上游移植测试与双门联动端到端）。
-- 证据链可核验闭环：`skills/juchang-evidence-replay/scripts/freeze-audit.mjs`——**零写入冻结导出器**（stdout 只读），把群记忆（`groups/**/meta.json`）与审计链（`audit/*.jsonl`）冻结成可重算哈希（`rawExportSha256`，`freeze.sourceText` 内嵌可复核）的只读回放档案，配合 `check.mjs` / `evidence_replay_check` 核验；脚本不写文件、不发消息，守住零写入红线。回归测试 `test_freeze_chain` + `test_e2e_gates`（用生产 `mimi.json` 配置在临时目录跑通双门+审计落盘+冻结+核验），`test_juchang.py` 增至 63 条。
-- 结构防线与决策账本（学 pstack 的「Encode Lessons in Structure」）：`checks/lint.py` 加两条「写不出来」硬规则——规则 A 测试不得硬编码引用 gitignored 的实例生产配置（2026-11-09 e2e 在 CI 崩的出处）、规则 B Node 技能入口判定必须限定 `pathToFileURL`（2026-11-08 回执脚本在 8.3 短路径 `~` 上静默不执行的出处）；加 `--selftest` 用坏样例证明规则真会红、好样例不误报（对应 pstack「新检查必须先挂真实错误」）。新增 [docs/decisions.md](docs/decisions.md) 项目决策账本（append-only，六列对齐 pstack `show-me-your-work`）与 [docs/从pstack学到的结构防线.md](docs/从pstack学到的结构防线.md)（对照表、抄/不抄清单）。
+- 据场三门（juchang-skills 第一批三个成熟 Skill 的 mimi 适配版），全部默认关：`tools.decision_gate_check`（决策门禁查询——按证据状态×动作等级×可逆性算出 automatic / after_approval / manual_only / blocked 路由与理由，只算不执行）、`tools.evidence_replay_check`（证据回放核对）、`tools.receipt_verify`（Matrix 回执核验，结果只证明内部一致）。三个技能包进 `skills/`，脚本零依赖；决策门禁公式由上游 TypeScript 机械剥类型移植，行为等价性用上游 16 条测试原样移植验证。
+- 写提案决策门禁 `write.decision_gate`，默认关。打开并在 `tools` 里声明各写工具的等级（如 `"docs_create": "L2"`）后，propose 阶段自动过门：`blocked` 拒绝提案并说明依据，`manual_only` 拒绝代做，其余放行进既有确认流——门禁只能加严不能放宽，`automatic` 仍需发起人确认（确认不能关）。证据状态优先取本会话近期 `evidencegate_check` 的路由（双门联动），没有或过期用配置默认；来源连同等级、路由、审批模式一起写进审计。回滚：配置里删掉 `decision_gate` 段即回到现状。见 [agents/CONFIG.md](agents/CONFIG.md) 的 write 段。
+- `/状态` 多一行门禁状态（三门全关时不出现，正文和以前一样）：三门开关、最近 7 天放行提案/阻断/两门查询次数、最近一次阻断的等级与依据来源。不打印编号、群号和路径。[agents/CONFIG.md](agents/CONFIG.md) 的 tools 表与 write 段补齐四个新键的说明。
+- 证据链可核验闭环：`skills/juchang-evidence-replay/scripts/freeze-audit.mjs` 零写入冻结导出器（stdout 只读），把群记忆与审计链冻结成可重算哈希的只读回放档案，配合核对器核验；脚本不写文件、不发消息。见 skills/juchang-evidence-replay/SKILL.md 的用法。
+- 结构防线与决策账本（学 pstack 的「Encode Lessons in Structure」）：`checks/lint.py` 加两条硬规则（测试不得硬编码 gitignored 实例配置；Node 技能入口判定限定 pathToFileURL）与 `--selftest`（坏样例必须红、好样例不误报）；新增 [docs/decisions.md](docs/decisions.md) 项目决策账本与 [docs/从pstack学到的结构防线.md](docs/从pstack学到的结构防线.md)。
+- 新增 [docs/决策门禁对照与接入方案.md](docs/决策门禁对照与接入方案.md)：LangGraph interrupt、OpenAI Agents SDK approval、Claude Code permission、CrewAI human_input 对照 juchang 三维路由的「抄什么 / 不抄什么」18 条对照表与 mimi 适配设计。
 
 ## [0.12.0] - 2026-11-08
 
