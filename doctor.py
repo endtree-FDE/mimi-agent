@@ -1,7 +1,7 @@
 # 只读诊断。不启动 event consume，不发消息，不写心跳。
 # 外部命令、进程列表、域名解析都由调用方传入，测试不必连真的飞书。
 import base64, csv, io, json, os, re, socket, subprocess, time
-import confirm_mode
+import confirm_mode, guard, lifecycle, proc_identity
 
 _SCOPE_RX = re.compile(r"\b[a-z][a-z0-9_.]*(?::[a-z0-9_.]+){1,8}\b")
 _SECRET_KEY = re.compile(r"^(app_secret|api_key|api_secret|password|passwd)$", re.I)
@@ -470,6 +470,452 @@ def _stamp_epoch(text):
     return None
 
 
+# 起停和最近一次成败都只读已经有的文件：state/bot.lock、state/heartbeat、
+# state/shutdown.request、logs/events.jsonl、logs/journal.jsonl、logs/bot.log。
+# 不新写状态文件，也不为了探活去连飞书。刚轮转走的 .1 不追，宁可少报。
+_SKIP_SERVICE = ("--doctor", "--check", "--dry-run", "--lock-test")
+_LOG_LINE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(?:[,.]\d+)?\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+(.*)$")
+_FRAME = re.compile(r"^File \".+\", line \d+")
+_UNIX_HOME = re.compile(r"(?:/home/|/Users/|/root/)[^\s\"']+")
+_OPEN_ID = re.compile(r"\b(?:ou|oc|om|on)_[A-Za-z0-9]{8,}\b")
+_CODE_TOKEN = re.compile(r"[A-Za-z0-9_.:-]{1,40}")
+_TOOL_TOKEN = re.compile(r"[A-Za-z0-9_]{1,40}")
+_FIRST_BEAT = 90
+
+
+def _clock(stamp):
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(stamp)))
+    except (OverflowError, OSError, ValueError, TypeError):
+        return ""
+
+
+def _ago(now, stamp):
+    try:
+        delta = int(float(now) - float(stamp))
+    except (TypeError, ValueError):
+        return ""
+    if delta < 0:
+        delta = 0
+    if delta < 60:
+        return "%d 秒前" % delta
+    if delta < 3600:
+        return "%d 分钟前" % (delta // 60)
+    if delta < 86400:
+        return "%d 小时前" % (delta // 3600)
+    return "%d 天前" % (delta // 86400)
+
+
+def _unhealthy_after(cfg):
+    """和部署核对同一条线：没写、写 0 或写错都是 180 秒。这里只用来措辞，不因此判失败。"""
+    alerts = (cfg or {}).get("alerts")
+    alerts = alerts if isinstance(alerts, dict) else {}
+    try:
+        n = float(alerts.get("unhealthy_after_sec"))
+    except (TypeError, ValueError):
+        return 180.0
+    if n <= 0:
+        return 180.0
+    return min(n, 86400.0)
+
+
+def _serving_here(procs, base):
+    """本目录正在服务的 agentbot。诊断、自检、演练不算。进程表没拿到时返回 None。"""
+    if procs is None:
+        return None
+    base_norm = (base or "").replace("/", "\\").rstrip("\\").lower()
+    found = []
+    for proc in procs:
+        cmd = proc.get("cmdline") or ""
+        low = cmd.lower().replace("/", "\\")
+        if "agentbot.py" not in low or any(flag in low for flag in _SKIP_SERVICE):
+            continue
+        if base_norm and base_norm not in low:
+            continue
+        found.append(proc)
+    return found
+
+
+def _read_lock(base):
+    """返回 (lock 或 None, 锁文件修改时间或 None, 坏了没有)。坏文件和读不到分开说。"""
+    path = os.path.join(base or "", "state", "bot.lock")
+    if not os.path.isfile(path):
+        return None, None, False
+    try:
+        text = open(path, encoding="utf-8", errors="replace").read()
+        started = os.path.getmtime(path)
+    except OSError:
+        return None, None, True
+    lock = proc_identity.parse_lock(text)
+    if not lock:
+        return None, started, True
+    return lock, started, False
+
+
+def _heartbeat_ts(base):
+    """返回 (epoch 或 None, 文件在但不是时间戳)。没有文件是 (None, False)。"""
+    path = os.path.join(base or "", "state", "heartbeat")
+    if not os.path.isfile(path):
+        return None, False
+    try:
+        return int(open(path, encoding="utf-8").read().strip()), False
+    except (OSError, ValueError):
+        return None, True
+
+
+def _beat_clause(hb, hb_bad, lock_mtime, now, after):
+    if hb_bad:
+        return "WARN", "state/heartbeat 不是时间戳。"
+    if hb is None:
+        age = None if lock_mtime is None else now - lock_mtime
+        if age is not None and 0 <= age <= _FIRST_BEAT:
+            return "OK", "还没有心跳（刚启动时正常）。"
+        return "WARN", "还没有 state/heartbeat。"
+    age = now - hb
+    if age < 0:
+        age = 0
+    if age < after:
+        return "OK", "心跳 %s（%s）。" % (_clock(hb), _ago(now, hb))
+    return "WARN", "心跳 %s，已经 %s 没更新（告警线 %d 秒）。" % (_clock(hb), _ago(now, hb), int(after))
+
+
+def service_status(base, procs, now, cfg=None):
+    """在跑、正在停，还是已经停。只读锁、停机请求、心跳和调用方给的进程表。
+
+    不结束进程。「没在跑」也不判失败：诊断经常在启动前跑。归属和 duplicate_findings
+    一样，看命令行里有没有本目录，避免另写一套。
+    """
+    now = float(now)
+    serving = _serving_here(procs, base)
+    lock, lock_mtime, lock_bad = _read_lock(base)
+    stopping = os.path.isfile(lifecycle.request_path(os.path.join(base or "", "state")))
+    hb, hb_bad = _heartbeat_ts(base)
+    after = _unhealthy_after(cfg)
+    if serving is None:
+        if lock:
+            return "WARN", "列不出进程。state/bot.lock 写着 pid %s，看不出是在跑还是已停。" % lock["pid"]
+        if lock_bad:
+            return "WARN", "列不出进程。state/bot.lock 读不到或不是以进程号开头。"
+        return "WARN", "列不出进程，也没有 state/bot.lock，看不出是在跑还是已停。"
+    if lock_bad and not serving:
+        return "WARN", "已停止。state/bot.lock 读不到或不是以进程号开头。"
+    if not serving:
+        if lock and stopping:
+            return ("WARN", "已停止。锁里的 pid %s 已经不在，还留着停机请求。"
+                            "启动时会当成过期锁接管，不会结束别的进程。" % lock["pid"])
+        if lock:
+            extra = ""
+            if hb is not None:
+                extra = "上次心跳 %s（%s）。" % (_clock(hb), _ago(now, hb))
+            return ("WARN", "已停止。锁里的 pid %s 已经不在，启动时会当成过期锁接管，不会结束别的进程。%s"
+                    % (lock["pid"], extra))
+        if stopping:
+            return "WARN", "已停止。还留着停机请求，进程已经不在。"
+        if hb is not None:
+            extra = "上次心跳 %s（%s）。" % (_clock(hb), _ago(now, hb))
+        elif hb_bad:
+            return "WARN", "已停止。没有 state/bot.lock，进程表里也没有本目录的服务进程。state/heartbeat 不是时间戳。"
+        else:
+            extra = "没有 state/heartbeat。"
+        return "OK", "已停止。没有 state/bot.lock，进程表里也没有本目录的服务进程。%s" % extra
+    pids = []
+    for proc in serving:
+        try:
+            pids.append(int(proc.get("pid")))
+        except (TypeError, ValueError):
+            continue
+    pid_s = ",".join(str(pid) for pid in pids) or "?"
+    many = "本目录有 %d 个服务进程。" % len(pids) if len(pids) > 1 else ""
+    mismatch = ""
+    if lock and lock.get("base") and proc_identity.norm_path(lock.get("base")) != proc_identity.norm_path(base):
+        mismatch = "锁里的目录和这次诊断不一致。"
+    if stopping:
+        return "WARN", "正在停止。pid=%s，已收到停机请求。%s%s" % (pid_s, many, mismatch)
+    if lock_bad or not lock:
+        return "WARN", "进程表里有本目录服务进程 pid=%s，但没有能用的 state/bot.lock。%s" % (pid_s, many)
+    if int(lock["pid"]) not in pids:
+        return ("WARN", "进程表里有本目录服务进程 pid=%s，锁里却是 pid %s。%s%s"
+                % (pid_s, lock["pid"], many, mismatch))
+    level, beat = _beat_clause(hb, hb_bad, lock_mtime, now, after)
+    if len(pids) > 1 and level == "OK":
+        level = "WARN"
+    started = ("锁写于 %s。" % _clock(lock_mtime)) if lock_mtime else ""
+    return level, "运行中。pid=%s。%s%s%s%s" % (lock["pid"], started, beat, many, mismatch)
+
+
+def _iter_jsonl(path):
+    if not path or not os.path.isfile(path):
+        return
+    try:
+        handle = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        yield {"_unreadable": True}
+        return
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                yield row
+
+
+def _ok_flag(value):
+    if value is True or value == 1:
+        return True
+    if value is False or value == 0:
+        return False
+    if isinstance(value, str) and value.strip().lower() in ("1", "true", "yes"):
+        return True
+    if isinstance(value, str) and value.strip().lower() in ("0", "false", "no"):
+        return False
+    return None
+
+
+def collapse_reason(text):
+    """收成一句。堆栈行、File 行和 Traceback 头都丢掉，不把调用栈糊进诊断。"""
+    for line in (text or "").splitlines():
+        raw = line.rstrip()
+        body = raw.strip()
+        if not body:
+            continue
+        found = _LOG_LINE.match(body)
+        if found:
+            body = found.group(3).strip()
+        if not body or body.startswith("Traceback") or _FRAME.match(body):
+            continue
+        if body.startswith(("During handling of the above exception", "The above exception was the direct cause")):
+            continue
+        if raw[:1] in (" ", "\t") and not found:
+            continue
+        body = re.split(r"Traceback \(most recent call last\):", body, maxsplit=1)[0]
+        body = re.sub(r"\s+", " ", body).strip()
+        if body:
+            return body[:500]
+    return ""
+
+
+def _public_sentence(text):
+    text = collapse_reason(text) or str(text or "")
+    text = _UNIX_HOME.sub("[本地路径已隐藏]", text)
+    text = guard.redact(text, ())
+    text = _OPEN_ID.sub("某编号", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if "Traceback" in text or 'File "' in text:
+        text = collapse_reason(text)
+    if not text:
+        return "日志里没有可读的原因。"
+    if len(text) > 120:
+        text = text[:120].rstrip() + "…"
+    if text[-1] not in "。！？.!?":
+        text += "。"
+    return text
+
+
+def _token(text, rx, fallback):
+    raw = str(text or "").strip()
+    if rx.fullmatch(raw):
+        return raw
+    return fallback
+
+
+def _scan_outcomes(base):
+    """读回答成败。返回 (成功时间或 None, 失败候选列表, 见过回答没有, 读失败的文件名或空)。
+
+    失败候选是 {ts, sentence, vague}。vague 的行只有「没成功」，没有原因；
+    附近 5 秒内的 bot.log 可以补上那一句。
+    """
+    logs = os.path.join(base or "", "logs")
+    ok_ts = None
+    saw_answer = False
+    fails = []
+    broken = ""
+    for name in ("events.jsonl", "journal.jsonl"):
+        for row in _iter_jsonl(os.path.join(logs, name)):
+            if row.get("_unreadable"):
+                broken = broken or name
+                continue
+            if str(row.get("kind") or "") != "answer":
+                continue
+            stamp = _stamp_epoch(row.get("ts"))
+            flag = _ok_flag(row.get("ok"))
+            if flag is None or stamp is None:
+                continue
+            saw_answer = True
+            if flag:
+                ok_ts = stamp if ok_ts is None else max(ok_ts, stamp)
+                continue
+            tools = row.get("tools") if isinstance(row.get("tools"), list) else []
+            bad = [item for item in tools if isinstance(item, dict) and item.get("ok") is False]
+            if bad:
+                tool = _token(bad[-1].get("tool"), _TOOL_TOKEN, "未知工具")
+                code = _token(bad[-1].get("code"), _CODE_TOKEN, "")
+                if code and code != "0":
+                    sentence = "回答没有成功，工具 %s 返回错误码 %s。" % (tool, code)
+                    vague = False
+                else:
+                    sentence = "回答没有成功，工具 %s 失败。" % tool
+                    vague = False
+            elif name == "journal.jsonl":
+                sentence = "回答没有成功。journal 只记成败，没有原因。"
+                vague = True
+            else:
+                sentence = "回答没有成功，日志里没有更具体的原因。"
+                vague = True
+            fails.append({"ts": stamp, "sentence": sentence, "vague": vague})
+        if broken:
+            continue
+        if name != "events.jsonl":
+            continue
+        for row in _iter_jsonl(os.path.join(logs, name)):
+            if row.get("_unreadable"):
+                continue
+            kind = str(row.get("kind") or "")
+            stamp = _stamp_epoch(row.get("ts"))
+            if stamp is None:
+                continue
+            if kind == "tool":
+                flag = _ok_flag(row.get("ok"))
+                code = _token(row.get("code"), _CODE_TOKEN, "")
+                if flag is not False and not (code and code != "0"):
+                    continue
+                tool = _token(row.get("tool"), _TOOL_TOKEN, "未知工具")
+                err = collapse_reason(str(row.get("err") or ""))
+                if code and code != "0":
+                    sentence = "工具 %s 失败，错误码 %s。" % (tool, code)
+                elif err:
+                    sentence = "工具 %s 失败：%s" % (tool, err)
+                else:
+                    sentence = "工具 %s 失败。" % tool
+                fails.append({"ts": stamp, "sentence": sentence, "vague": False})
+            elif kind == "consumer":
+                cause = _token(row.get("cause"), _CODE_TOKEN, "unknown")
+                code = _token(row.get("code"), _CODE_TOKEN, "")
+                try:
+                    rc = int(row.get("rc"))
+                except (TypeError, ValueError):
+                    rc = None
+                event = _token(row.get("event"), _CODE_TOKEN, "")
+                who = ("接收进程 %s" % event) if event else "接收进程"
+                bits = "原因 %s" % cause
+                if rc is not None:
+                    bits += "，退出码 %s" % rc
+                if code:
+                    bits += "，错误码 %s" % code
+                fails.append({"ts": stamp, "sentence": "%s 退出，%s。" % (who, bits), "vague": False})
+    log_hit = _bot_log_failure(os.path.join(logs, "bot.log"))
+    if log_hit == "unreadable":
+        broken = broken or "bot.log"
+    elif log_hit:
+        fails.append(log_hit)
+    return ok_ts, fails, saw_answer, broken
+
+
+def _bot_log_failure(path):
+    """最后一条 ERROR。只要那一句，后面的 Traceback 不进诊断。读不到返回 'unreadable'。"""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        return "unreadable"
+    blocks = []
+    current = None
+    for line in lines:
+        found = _LOG_LINE.match(line.strip())
+        if found:
+            if current and current["level"] in ("ERROR", "CRITICAL") and current["text"]:
+                blocks.append(current)
+            current = {"level": found.group(2), "ts": _stamp_epoch(found.group(1)), "text": found.group(3)}
+            continue
+        if current and current["level"] in ("ERROR", "CRITICAL") and line.strip():
+            current["text"] += "\n" + line
+    if current and current["level"] in ("ERROR", "CRITICAL") and current["text"]:
+        blocks.append(current)
+    chosen = None
+    for block in blocks:
+        if block["ts"] is None:
+            continue
+        sentence = collapse_reason(block["text"])
+        if not sentence:
+            continue
+        chosen = {"ts": block["ts"], "sentence": sentence, "vague": False}
+    return chosen
+
+
+def _pick_failure(fails):
+    """最近的一条。它自己没有原因时，用 5 秒内更具体的那句，避免只看到「没有成功」。"""
+    if not fails:
+        return None
+    newest = max(item["ts"] for item in fails)
+    pool = [item for item in fails if abs(item["ts"] - newest) <= 5]
+    specific = [item for item in pool if not item.get("vague")]
+    group = specific or pool
+    return max(group, key=lambda item: item["ts"])
+
+
+def last_success(base, now):
+    """最近一次成功应答。events.jsonl 和 journal.jsonl 都认，取更晚的那次。"""
+    ok_ts, _fails, saw_answer, broken = _scan_outcomes(base)
+    if broken and ok_ts is None and not saw_answer:
+        return "WARN", "%s 读不到，看不出最近一次成功应答。" % broken
+    if ok_ts is None and not saw_answer:
+        return "OK", "还没有成功应答。logs/events.jsonl 和 logs/journal.jsonl 都没有成功记录。"
+    if ok_ts is None:
+        return "WARN", "还没有成功应答。已有的回答记录里没有一次成功。"
+    return "OK", "最近一次成功应答是 %s（%s）。" % (_clock(ok_ts), _ago(now, ok_ts))
+
+
+def last_failure(base, now):
+    """最近一条失败，收成一句。之后已经成功应答过就仍是 OK，只是把那一句留下。"""
+    ok_ts, fails, _saw, broken = _scan_outcomes(base)
+    picked = _pick_failure(fails)
+    if picked is None:
+        if broken:
+            return "WARN", "%s 读不到，看不出最近一条失败。" % broken
+        return "OK", "没有失败记录。"
+    sentence = _public_sentence(picked["sentence"])
+    when = "%s（%s）" % (_clock(picked["ts"]), _ago(now, picked["ts"]))
+    if ok_ts is not None and ok_ts + 1 >= picked["ts"]:
+        return "OK", "上一笔失败是 %s。%s之后已经成功应答过。" % (when, sentence)
+    return "WARN", "最近一条失败是 %s。%s" % (when, sentence)
+
+
+def checklist_row(lines):
+    """把这一次诊断收成通过、警告、失败三份名单。同一个名字只进最严重的那一档。"""
+    rank = {}
+    order = []
+    weight = {"OK": 0, "WARN": 1, "FAIL": 2}
+    for line in lines or []:
+        parts = (line or "").split(None, 2)
+        if len(parts) < 2:
+            continue
+        level, name = parts[0], parts[1]
+        if level not in weight or name == "checklist":
+            continue
+        if name not in rank:
+            order.append(name)
+            rank[name] = level
+        elif weight[level] > weight[rank[name]]:
+            rank[name] = level
+    buckets = {"OK": [], "WARN": [], "FAIL": []}
+    for name in order:
+        buckets[rank[name]].append(name)
+    def join(items):
+        return "、".join(items) if items else "无"
+    info = "通过 %s。警告 %s。失败 %s。" % (join(buckets["OK"]), join(buckets["WARN"]), join(buckets["FAIL"]))
+    if buckets["FAIL"]:
+        return "FAIL", info
+    if buckets["WARN"]:
+        return "WARN", info
+    return "OK", info
+
+
 def report(cfg, base, exe, run, processes, resolve, connect, modules, env):
     """返回 (输出行, 退出码)。有 FAIL 时退出码为 1，只有 WARN 时仍是 0。"""
     cfg = cfg or {}
@@ -594,8 +1040,19 @@ def report(cfg, base, exe, run, processes, resolve, connect, modules, env):
         for level, info in judge_running_consumes(procs, base, profile, cfg, env):
             add(level, "consume", info)
     window, warn_after = restart_setting(cfg)
-    level, info = restart_ledger(os.path.join(base, "logs", "events.jsonl"), time.time(), window, warn_after)
+    now = time.time()
+    level, info = restart_ledger(os.path.join(base, "logs", "events.jsonl"), now, window, warn_after)
     add(level, "restart", info)
+    # 起停、最近一次成功、最近一条失败都是只读探针，不新开连接，也不改退出码语义：
+    # 没在跑、旧的失败本身不是 FAIL。名单放在最后，把前面每一项收进去。
+    level, info = service_status(base, procs, now, cfg)
+    add(level, "service", info)
+    level, info = last_success(base, now)
+    add(level, "last_ok", info)
+    level, info = last_failure(base, now)
+    add(level, "last_fail", info)
+    level, info = checklist_row(lines)
+    add(level, "checklist", info)
     return lines, (1 if fail else 0)
 
 
