@@ -436,6 +436,14 @@ req = start_txt.find("shutdown.request")
 check("启动脚本只在真正启动时清掉停止请求，已经在跑时不清",
       already >= 0 and req > already and "ParentProcessId" not in start_txt and "taskkill" not in start_txt.lower())
 
+ops = open(os.path.join(FW, "docs", "运维升级回滚与停机意图.md"), encoding="utf-8").read()
+check("运维说明要求停和换版本同一步、一次只动一个，回滚不直接起旧进程",
+      "同一步" in ops and "一次只" in ops and "python agentbot.py" in ops and "三行" in ops
+      and "-Config" in ops and "example.json" in ops and "shutdown.request" in ops and "deploy.lock" in ops)
+check("运维说明写了 shutdown.request 的触发和验收，并写明看门狗不读它",
+      "stop.ps1" in ops and "stopped" in ops and "shutdown done" in ops and "看门狗不读" in ops
+      and "received" in ops and "（延迟回复）" in ops)
+
 def _write_id(path, bot_id):
     data = json.load(open(path, encoding="utf-8"))
     data["bot_open_id"] = bot_id

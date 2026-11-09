@@ -246,6 +246,7 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `scripts/reload.ps1` | 改完开关后平滑重启：先停，确认没有第二个接收进程，再启动 |
 | `checks/verify_deploy.py` | 升级或回滚之后一条命令拿机器可读结论（版本、心跳、拓扑、配置、kb、诊断）。只读，不发消息也不动进程。见 [docs/部署后验证.md](docs/部署后验证.md) |
 | `docs/runbook-升级与回滚.md` | 升级四步（展开八条命令）、每一步的停手判据、含看门狗的回滚顺序、备份和自动化的坑 |
+| `docs/运维升级回滚与停机意图.md` | 停和换版本同一步、回滚不直接起旧进程、启动和计划任务写死 `-Config`、`shutdown.request` 的触发和验收 |
 | `docs/断线提醒与晨报.md` | 断线提醒和早晨摘要怎么开，以及飞书要哪些权限 |
 | `docs/对外口径.md` | 官网浮层和飞书群共用的对外口径唯一来源（`voice-v2`）：能介绍哪些作品和路径、口吻、保密期不复述名字、不谈什么、怎么交接（`[[COOP]]` 出名片、`[[LEAD]]` 出「发给团队」的按钮） |
 | `docs/多入口对照与方案.md` | LangBot、AstrBot、NoneBot2 怎么做多入口，我们这套缺哪四样，对外入口会怎么坏，以及为什么先不并进程 |
