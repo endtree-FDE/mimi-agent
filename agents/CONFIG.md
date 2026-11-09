@@ -354,9 +354,45 @@ python checks/check_config.py agents/example.json
 | `base_time_field` | 加记录时，如果没有这一列，就自动填上当前时间。不需要就改成 `""`。 |
 | `base_select_fields` | 飞书里的单选列。程序会把纯文字包成列表再写入，否则飞书会报格式错误。例子里是「状态」。你的表没有单选列就改成 `[]`。 |
 | `max_batch` | 一次批量建日程最多几条。默认 `10`。 |
-| `decision_gate` | 写提案决策门禁（juchang-decision-gate），默认关。`enabled: true` 并在 `tools` 里声明哪些写工具过门禁、各是什么等级（如 `"docs_create": "L2"`，只能是 L1/L2/L3；写错时该写动作被拒绝，宁可挡住也不猜）。propose 阶段自动过门：`blocked` 拒绝提案并说明依据，`manual_only` 拒绝代做（提示人工操作），其余放行进既有确认流——门禁只能加严不能放宽，`automatic` 仍需发起人确认。证据状态优先取本会话近期 `evidencegate_check` 的路由，没有或过期用 `evidence_default`（默认 `sufficient`，`evidence_window_sec` 默认 900）；来源连同等级、路由、审批模式一起写进审计。没在 `tools` 里点名的写工具不过门禁；不想过门就删掉整个 `decision_gate` 段，行为回到从前。路由给出 `approval: dual`（critical 影响的动作常见）时启用双人复核：发起人回复「确认 码」只记下不执行，需另一位写入白名单管理员在同一会话内回复「复核 码」才真正执行；发起人自己复核不算，复核人不在白名单被拒并留痕，取消不挡（发起人随时可「取消 码」）。复核码与确认码共用同一套时效与一次性约束，审计链依次落 `write_confirmed`（dual first / dual second）与 `write_done`。 |
+| `decision_gate` | 写提案决策门禁（juchang-decision-gate），默认关。`enabled: true` 并在 `tools` 里声明哪些写工具过门禁、各是什么等级（如 `"docs_create": "L2"`，只能是 L1/L2/L3；写错时该写动作被拒绝，宁可挡住也不猜）。propose 阶段自动过门：`blocked` 拒绝提案并说明依据，`manual_only` 拒绝代做（提示人工操作），其余放行进既有确认流——门禁只能加严不能放宽，`automatic` 仍需发起人确认。证据状态优先取本会话近期 `evidencegate_check` 的路由，没有或过期用 `evidence_default`（默认 `sufficient`，`evidence_window_sec` 默认 900）；来源连同等级、路由、审批模式一起写进审计。没在 `tools` 里点名的写工具不过门禁；不想过门就删掉整个 `decision_gate` 段，行为回到从前。路由给出 `approval: dual`（critical 影响的动作常见）时启用双人复核：发起人回复「确认 码」只记下不执行，需另一位写入白名单管理员在同一会话内回复「复核 码」才真正执行；发起人自己复核不算，复核人不在白名单被拒并留痕，取消不挡（发起人随时可「取消 码」）。复核码与确认码共用同一套时效与一次性约束，审计链依次落 `write_confirmed`（dual first / dual second）与 `write_done`。试运行只挂 `docs_create` 与 `base_create` 为字符串 `L2`，见下一节。 |
 
 这些编号都不是密钥，但它们指向你的真实文档和表。不要把填好的配置发到公开的地方。
+
+### 决策门禁 L2（幕幕与 Mimi 同一段）
+
+这道门插在「已经通过写入白名单、还没发确认码」的位置。它只加严：阻断或拒绝代做时提案发不出去；放行时仍要发起人本人用确认码或卡片点头。确认不能关。默认关着。`agents/example.json` 里整段 `enabled` 是 `false`，仓库默认不打开。
+
+这一轮只挂两个写工具，等级都写成字符串 `L2`（公开修改）。追加文档、建日程、改日程、删日程、批量建日程、群记忆提案都不写进 `tools`，它们继续只过原来的白名单和确认。不要把某一项写成对象去改 `impact`。字符串 `L2` 由程序推导成可直接撤销、单一对象、可能发生、中影响；审批模式是负责人批准（`named`），执行路由是批准后执行（`after_approval`），发起人本人确认一次即可。把 `impact` 覆盖成 `critical` 会让审批模式变成双人复核（`dual`）：发起人回复「确认 码」只记下不执行，另一位写入白名单管理员在同一会话回复「复核 码」才执行。双人复核已经实现；这一轮试运行保持字符串 `L2`，不走到那条路。
+
+打开时改实例自己的配置（填好的 json 不进仓库），在已有的 `write` 里加上：
+
+```json
+"decision_gate": {
+  "enabled": true,
+  "tools": {
+    "docs_create": "L2",
+    "base_create": "L2"
+  },
+  "evidence_window_sec": 900,
+  "evidence_default": "sufficient"
+}
+```
+
+`tools.decision_gate_check.enabled` 设为 `true` 时，模型可以只读查询一条路由，查询本身不写飞书。写提案过门不依赖这个开关，程序直接调用 `skills/juchang-decision-gate/scripts/run-decision-gate.mjs`。想让证据状态来自票据门禁时，把 `tools.evidencegate_check.enabled` 也设为 `true`。三个开关可以分开开。
+
+证据状态记在本进程内存里，按会话记最近一次 `evidencegate_check`，不落盘。`evidence_window_sec` 不写是 `900`（秒）。窗口内：`ACCEPT_CANDIDATE` 当作依据完整，`HUMAN_REVIEW` 当作依据不完整，`MODEL_OUTPUT_INVALID` 当作缺少依据。依据不完整、冲突或缺少时，L2 提案被阻断，对方看到「决策门禁阻断」和证据来源。没有记录、记录已过期，或票据门禁没开时，用 `evidence_default`（不写是 `sufficient`，普通新建文档和加记录仍进入确认）。审计里的 `evidence_source` 是 `evidencegate:ACCEPT_CANDIDATE`、`evidencegate:HUMAN_REVIEW`、`evidencegate:MODEL_OUTPUT_INVALID` 或 `default`。写成 `0` 或负数时，本进程里已有的记录不过期。重启后内存记录清空，下一次写入回到默认，直到这一会话又跑过票据门禁。
+
+和确认码、白名单的关系：
+
+- 人不在 `write.allowed_users` 里时，在进门禁之前就拒绝。审计是 `write_denied`，对方看到「你不在写入白名单里」。门禁不加人，也不把谁移出白名单。
+- 放行后的确认码、卡片、有效期、发起人本人、原来的会话，仍按 [docs/确认方式.md](../docs/确认方式.md) 和 [docs/安全红线.md](../docs/安全红线.md)。门禁不发码、不消耗码、不代替点头。
+- `tools` 里没点名的写动作不过这道门，确认码照旧要。
+- `tools` 必须是对象。写成列表时程序当成没声明任何工具，门禁等于没挂上，写入仍只靠白名单和确认码。
+- 等级只接受 `L1`、`L2`、`L3`。写成别的，该动作被拒绝（fail closed），对方看到等级不合法。这一轮两项都写 `L2`。依据完整时 `L3` 会拒绝代做，提示管理员自己在飞书里操作。
+
+回滚：从实例配置里删掉 `write.decision_gate` 整段，然后按现有办法平滑重启（`scripts\reload.ps1`）。删段之后，新建文档和加记录回到只有白名单和确认码，审计里的 `write_proposed` 不再带 `gate`。只读查询要一并关掉时，把 `tools.decision_gate_check.enabled` 改回 `false`。不要为了回滚去改程序默认值。
+
+试跑：本机要有 `node`，实例目录里要有上面那个脚本。脚本缺失或跑失败时，挂了门的 `docs_create` 和 `base_create` 提案发不出去，对方看到「决策门禁脚本…」；没挂上的写工具不受影响。改完要重启进程才读到新段。不要往正式群发测试消息。看 `audit/` 里当月的 jsonl：依据完整时期望 `write_proposed` 的 `gate.level` 为 `L2`、`gate.execution` 为 `after_approval`、`gate.approval` 为 `named`，确认码或卡片仍要发起人本人点头。依据不完整时期望 `write_blocked`，且 `gate.evidence` 为 `partial`。回滚并重启后再提议一次新建文档，确认 `write_proposed` 没有 `gate`。
 
 ## 确认 confirm
 
