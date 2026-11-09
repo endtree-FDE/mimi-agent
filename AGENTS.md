@@ -63,6 +63,9 @@ python checks/check_config.py agents/example.json
 # 回答质量回归（假模型，不连飞书，不拿单实例锁）
 python evals/run.py --config agents/example.json --provider fake --tag ci --baseline evals/baseline/ci.json --out evals/out
 
+# 固定问答回归（假会话和假工具结果，不连飞书，不调模型）
+python checks/eval_smoke.py
+
 # 只读诊断（不发消息；没装 lark-cli 会列出缺什么）
 python agentbot.py agents/example.json --doctor
 

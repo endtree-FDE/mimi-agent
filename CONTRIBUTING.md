@@ -28,6 +28,14 @@ python evals/run.py --config agents/example.json --provider fake --tag ci --base
 
 加用例和升级前怎么跑真模型，见 [docs/回归测试.md](docs/回归测试.md)。不要把 `evals/out/` 或真实聊天写进仓库。
 
+固定问答回归更小，只断言拒答、需确认和只读成功。不连飞书，也不调模型：
+
+```text
+python checks/eval_smoke.py
+```
+
+加用例和看失败的方法写在 [docs/回归测试.md](docs/回归测试.md) 的「固定问答回归」。
+
 另外运行：
 
 ```text

@@ -264,6 +264,7 @@ A screenshot placeholder, with rules for hiding ids, is in [docs/demo/README.md]
 | `scripts/` | Windows 上的启动、停止、看门狗、计划任务、`verify_windows.ps1` |
 | `tests/run_tests.py` | 离线测试。通过时最后一行打印条数 |
 | `evals/run.py` | 回答质量回归。假模型不连飞书；用法见 [docs/回归测试.md](docs/回归测试.md) |
+| `checks/eval_smoke.py` | 固定问答回归。假会话和假工具结果，断言拒答、需确认、只读成功。不连飞书、不调模型。见 [docs/回归测试.md](docs/回归测试.md) |
 | `docs/一键安装.md` | 第一次在 Windows 上安装：一题一题问，密钥不进文件 |
 | `docs/快速开始.md` | 新人 15 分钟跑起来 |
 | `docs/排障.md` | 常见问题 |
