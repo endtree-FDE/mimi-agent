@@ -3123,6 +3123,41 @@ check("确认码：别人、别的会话、别的话题、空发送人或空消�
       and "STILL2 True" in _conf_o and "TOPIC 只有发起人本人" in _conf_o and "STILL3 True" in _conf_o
       and "EMPTY 不能确认" in _conf_o and "NOMID 不能确认" in _conf_o and "STILL4 True" in _conf_o
       and "OKTOPIC True" in _conf_o and "MAINLEFT True" in _conf_o, _conf_o)
+_rev_src = r'''
+import os, sys, time
+sys.argv = ["agentbot.py", os.environ["CFG"], "--dry-run", os.environ["EMPTY"]]
+import agentbot
+BN = agentbot.CFG["bot_names"][0]
+CH = agentbot.CFG["chat_ids"][0]
+M = [{"id": agentbot.CFG["bot_open_id"], "key": "@_user_1", "name": BN}]
+agentbot.CFG["rate_limit"] = {"min_gap_per_user": 0, "max_per_hour": 100, "max_commands_per_min": 100}
+agentbot.CFG.setdefault("write", {}).setdefault("allowed_users", {})["user_admin2"] = "复核管理员"
+def ask(mid, text, sender):
+    ev = {"message_id": mid, "chat_id": CH, "chat_type": "group", "message_type": "text",
+          "sender_id": sender, "sender_type": "user", "content": "@%s %s" % (BN, text), "mentions": M}
+    agentbot.handle(ev)
+now = time.time()
+rec = {"tool": "docs_create", "argv": ["docs", "+create", "--title", "双人复核演练"],
+       "steps": [{"tool": "docs_create", "argv": ["docs", "+create", "--title", "双人复核演练"]}],
+       "summary": "双人复核演练", "user": "user_admin", "chat_id": CH, "scope": "", "ts": now,
+       "notify_all": False, "usage_scope": "group", "mode": "code", "token": "revtok00000001",
+       "action_hash": "a" * 64, "expires": now + 300, "button_ok": False, "code_ok": False,
+       "fallback": True, "impact": "演练", "dual": True, "first_ok": True,
+       "first_user": "user_admin", "first_at": now}
+agentbot.TOOLS.pending["900123"] = rec
+ask("rvdual0", "复核 900123", "user_admin")
+ask("rvdual1", "复核 900123", "user_admin2")
+ask("rvdual2", "复核 900123", "user_admin2")
+ask("rvdual3", "复核 900124", "user_admin2")
+print("RVBOTLOG", open(os.path.join(agentbot.LOGD, "bot.log"), encoding="utf-8", errors="replace").read()[-2500:])
+'''
+_rev_o = _bot_py(_rev_src, {"EMPTY": _empty})
+check("复核命令不调模型走命令路径：发起人自己复核不算，第二位白名单管理员复核后执行，重放和错码失效",
+      "[dry-run] reply rvdual0: 复核需要另一位管理员" in _rev_o
+      and "[dry-run] reply rvdual1: 已完成：双人复核演练" in _rev_o
+      and "[dry-run] reply rvdual2: 确认码无效或已过期" in _rev_o
+      and "[dry-run] reply rvdual3: 确认码无效或已过期" in _rev_o
+      and "fake-agent" not in _rev_o, _rev_o[-2000:])
 _gap_cfg = json.loads(json.dumps(cfg))
 _gap_cfg["rate_limit"] = {"min_gap_per_user": 20, "max_per_hour": 100, "max_commands_per_min": 40}
 _gap_path = os.path.join(T, "gap.json"); json.dump(_gap_cfg, open(_gap_path, "w", encoding="utf-8"), ensure_ascii=False)

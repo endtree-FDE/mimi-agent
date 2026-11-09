@@ -26,6 +26,7 @@ mimi-agent 的决策账本，格式对齐 [poteto/plugins 的 pstack](https://gi
 | 2026-11-08 | fix | 回执核验脚本入口判定改用 pathToFileURL（上游手拼 URL pathname 在 8.3 短路径 `RUNNER~1` 下永不相等、入口静默不执行） | CI TEMP 含 `~` 路径触发；中文用户名路径同风险 | PR #95 提交 c30341f; checks/lint.py 规则 B | 已修+已编码防线 |
 | 2026-11-09 | adopt | 零写入冻结导出器 freeze-audit.mjs（stdout 只读）把群记忆+审计链冻结成可重算哈希档案 | 兑现已写的哈希链冻结映射，符合本地 JSON 备份偏好，不破零写入 | PR #96(c1778e8); skills/juchang-evidence-replay/scripts/freeze-audit.mjs | 已上线 |
 | 2026-11-09 | adopt | 从 pstack 学「Encode Lessons in Structure」：把四轮踩坑编码成 checks/lint.py 硬规则 + selftest | 文档能被跳过不报错，lint 当场拦截；新检查必须先挂真实错误 | PR #97; checks/lint.py; 规则 A/B | 本次 |
+| 2026-11-09 | adopt | dual 双人复核落地：Tools.review() 独立于 confirm()（后者被同发起人校验挡住），第一位确认只记下不执行，第二位白名单管理员「复核 码」才执行 | 承认 juchang 契约 dual 场景的必需能力；门禁只能加严（fail closed：单人永不执行），取消不担；审计链 dual first → dual second → write_done 可回放 | confirm_mode.confirm_pattern 正则加「复核」; tools.py review(); agentbot.py 路由分支; tests/test_juchang.py test_dual_review | 本次 |
 
 ## 更正记录（append-only，不叠历史）
 

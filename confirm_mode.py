@@ -124,7 +124,7 @@ def drop_unsubscribed_card(keys, setting, probe):
 
 def confirm_pattern(cfg):
     n = code_digits(cfg)
-    return re.compile(r"^(确认|取消)\s*(\d{%d})$" % n)
+    return re.compile(r"^(确认|取消|复核)\s*(\d{%d})$" % n)
 
 
 def code_fullmatch(cfg, code):

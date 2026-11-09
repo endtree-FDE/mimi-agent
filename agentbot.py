@@ -1896,6 +1896,8 @@ def _handle_claimed(ev, mid, ctype, uid):
     # 命令
     m = _confirm_match(q)
     if m:
+        if m.group(1) == "复核":
+            reply(mid, TOOLS.review(m.group(2), ctx)); return
         switched = feature_switch.try_confirm(
             CFG, BASE, CFG_PATH, m.group(2), ctx, cancel=(m.group(1) == "取消"),
             names=REDACT_NAMES, apply=not DRY)
