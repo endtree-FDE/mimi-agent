@@ -3159,6 +3159,7 @@ rec = {"tool": "docs_create", "argv": ["docs", "+create", "--title", "双人复�
        "fallback": True, "impact": "演练", "dual": True, "first_ok": True,
        "first_user": "user_admin", "first_at": now}
 agentbot.TOOLS.pending["900123"] = rec
+print("PIN", agentbot.TOOLS._pin_write_params("900123", rec))
 ask("rvdual0", "复核 900123", "user_admin")
 ask("rvdual1", "复核 900123", "user_admin2")
 ask("rvdual2", "复核 900123", "user_admin2")
@@ -3167,7 +3168,8 @@ print("RVBOTLOG", open(os.path.join(agentbot.LOGD, "bot.log"), encoding="utf-8",
 '''
 _rev_o = _bot_py(_rev_src, {"EMPTY": _empty})
 check("复核命令不调模型走命令路径：发起人自己复核不算，第二位白名单管理员复核后执行，重放和错码失效",
-      "[dry-run] reply rvdual0: 复核需要另一位管理员" in _rev_o
+      "PIN True" in _rev_o
+      and "[dry-run] reply rvdual0: 复核需要另一位管理员" in _rev_o
       and "[dry-run] reply rvdual1: 已完成：双人复核演练" in _rev_o
       and "[dry-run] reply rvdual2: 确认码无效或已过期" in _rev_o
       and "[dry-run] reply rvdual3: 确认码无效或已过期" in _rev_o

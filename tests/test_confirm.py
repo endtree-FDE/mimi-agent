@@ -91,6 +91,25 @@ def only(tools):
     return code, rec
 
 
+def audit_rows(base):
+    folder = os.path.join(base, "audit")
+    rows = []
+    if not os.path.isdir(folder):
+        return rows
+    for name in os.listdir(folder):
+        for line in open(os.path.join(folder, name), encoding="utf-8"):
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
+
+
+def swap_argv(rec, old, new):
+    argv = [new if x == old else x for x in list(rec.get("argv") or [])]
+    rec["argv"] = argv
+    rec["steps"] = [{"tool": rec.get("tool"), "argv": list(argv)}]
+    return rec
+
+
 def switch_cfg(base):
     return {
         "name": "t",
@@ -290,6 +309,148 @@ shown = tools.reveal_code(rec["token"])
 done = tools.confirm(code, actor(mid="msg_fb1"))
 check("卡片发不出去时改回确认码，本人仍能确认",
       code in shown and "改用确认码" in shown and done.startswith("已完成") and len(calls) == 1, shown + "\n" + done)
+
+# ---------- 参数摘要钉死：改参后确认失败，原样确认仍成功 ----------
+plain = {"tool": "docs_create", "summary": "在专用文件夹新建文档《周报》", "user": "user_admin",
+         "chat_id": "chat_group1", "scope": "", "memory_text": "",
+         "argv": ["docs", "+create", "--title", "周报"],
+         "steps": [{"tool": "docs_create", "argv": ["docs", "+create", "--title", "周报"]}]}
+again = dict(plain, button_ok=True, mode="code", fallback=True)
+check("确认进度不进参数摘要",
+      confirm_mode.param_digest_record(plain) == confirm_mode.param_digest_record(again)
+      and confirm_mode.param_digest_record(plain) == confirm_mode.param_digest_record(dict(plain, notify_all=False)))
+tail_a = confirm_mode.param_digest_record(dict(plain, tool="memory_propose", memory_text="甲" * 90 + "原文尾巴"))
+tail_b = confirm_mode.param_digest_record(dict(plain, tool="memory_propose", memory_text="甲" * 90 + "被人调包"))
+check("记忆正文后半不同则摘要不同", tail_a and tail_a != tail_b)
+
+tools, calls, base, _cfg = new_tools(False)
+text, card, ctx = propose(tools)
+code, rec = only(tools)
+sealed = tools._sealed_param_digest(code)
+swap_argv(rec, "周报", "被调包")
+tools.pending[code] = rec
+tools._update_pending(code, rec)
+denied = tools.confirm(code, actor(mid="msg_pin1"))
+again_denied = tools.confirm(code, actor(mid="msg_pin2"))
+rows = audit_rows(base)
+blob = json.dumps(rows, ensure_ascii=False)
+pin_rows = [row for row in rows if row.get("err") == "param_digest"]
+check("改了参数之后确认码不能执行，也不把码用掉",
+      "不一致" in denied and "不一致" in again_denied and not calls and code in tools.pending
+      and tools._sealed_param_digest(code) == sealed and sealed
+      and pin_rows and pin_rows[0].get("detail") == "mismatch"
+      and "被调包" not in blob and "user_admin" not in blob, denied + "\n" + blob[:800])
+cancelled = tools.confirm(code, actor(mid="msg_pin3"), cancel=True)
+check("参数被改过仍可取消，取消不会写入",
+      cancelled == "已取消。" and not calls and code not in tools.pending, cancelled)
+
+tools, calls, base, _cfg = new_tools(False)
+text, card, ctx = propose(tools)
+code, rec = only(tools)
+done = tools.confirm(code, actor(mid="msg_pin_ok"))
+check("参数没被改时确认码仍能执行原来的标题",
+      done.startswith("已完成") and len(calls) == 1 and "周报" in calls[0] and "被调包" not in str(calls[0]), done)
+
+tools, calls, base, cfg = new_tools(False)
+text, card, ctx = propose(tools)
+code, rec = only(tools)
+log = logging.getLogger("confirm-reload")
+tools2 = Tools(cfg, base, lambda: ["lark-cli"], log, dry=True)
+calls2 = []
+
+def fake_reload(argv):
+    calls2.append(list(argv))
+    return {"ok": True, "data": {"url": "https://example.com/docx/NEW"}}
+
+tools2.fake = fake_reload
+reloaded = tools2.confirm(code, actor(mid="msg_reload1"))
+check("重启后钉住的摘要还在，正常确认仍能执行",
+      reloaded.startswith("已完成") and len(calls2) == 1 and "周报" in calls2[0], reloaded)
+
+tools, calls, base, _cfg = new_tools(False)
+propose(tools, args={"title": "甲文档", "markdown": "1"})
+propose(tools, args={"title": "乙文档", "markdown": "2"})
+bad_code = good_code = ""
+bad = good = None
+for num, rec in tools.pending.items():
+    if "甲文档" in (rec.get("summary") or ""):
+        bad_code, bad = num, rec
+    if "乙文档" in (rec.get("summary") or ""):
+        good_code, good = num, rec
+swap_argv(bad, "甲文档", "被调包")
+tools.pending[bad_code] = bad
+tools._update_pending(bad_code, bad)
+ok_other = tools.confirm(good_code, actor(mid="msg_iso_ok"))
+bad_try = tools.confirm(bad_code, actor(mid="msg_iso_bad"))
+check("只改其中一条时，另一条仍按原参数执行",
+      ok_other.startswith("已完成") and len(calls) == 1 and "甲文档" not in str(calls[0]) and "乙文档" in calls[0]
+      and "不一致" in bad_try and bad_code in tools.pending, ok_other + "\n" + bad_try)
+
+tools, calls, base, _cfg = new_tools(False)
+tools._state_db().execute("delete from write_param_seals")
+tools._state_db().commit()
+text, card, ctx = propose(tools)
+code, rec = only(tools)
+tools._state_db().execute("delete from write_param_seals where code=?", (code,))
+tools._state_db().commit()
+missing = tools.confirm(code, actor(mid="msg_miss1"))
+miss_rows = [row for row in audit_rows(base) if row.get("err") == "param_digest"]
+check("摘要丢了就拒绝执行，确认码仍留着",
+      "不一致" in missing and not calls and code in tools.pending
+      and miss_rows and miss_rows[-1].get("detail") == "missing", missing)
+
+tools, calls, base, _cfg = new_tools(True, mode="button", ttl_sec=600)
+text, card, ctx = propose(tools)
+code, rec = only(tools)
+kept_hash = rec["action_hash"]
+swap_argv(rec, "周报", "被调包")
+tools.pending[code] = rec
+tools._update_pending(code, rec)
+clicked = tools.confirm_click(rec["token"], "yes", kept_hash, actor(), "msg_card1")
+check("按钮校验值没变但参数被改过时不执行，也不把按钮用掉",
+      "不一致" in clicked["text"] and not clicked["ok"] and not calls and code in tools.pending, clicked["text"])
+cancelled = tools.confirm_click(rec["token"], "no", kept_hash, actor(), "msg_card1")
+check("参数被改过仍可点取消",
+      cancelled["text"] == "已取消。" and not calls and not cancelled["ok"], cancelled["text"])
+
+tools, calls, base, _cfg = new_tools(False)
+tools.memory_enabled = True
+seen = []
+
+def remember(text, ctx):
+    seen.append(text)
+    return "已记下"
+
+tools.memory_hook = remember
+body = "甲" * 90 + "原文尾巴"
+tools.propose_memory({"text": body}, actor())
+code, rec = only(tools)
+rec["memory_text"] = "甲" * 90 + "被人调包"
+tools.pending[code] = rec
+tools._update_pending(code, rec)
+denied = tools.confirm(code, actor(mid="msg_mem1"))
+check("记忆正文后半被改过不能确认，也不会写入记忆",
+      "不一致" in denied and not seen and code in tools.pending and not calls, denied)
+tools.confirm(code, actor(mid="msg_mem_c"), cancel=True)
+tools.propose_memory({"text": body}, actor())
+code, rec = only(tools)
+done = tools.confirm(code, actor(mid="msg_mem_ok"))
+check("记忆正文没被改时确认仍会写入原来的全文",
+      done.startswith("已记") and seen == [body], done + "\n" + str(seen)[:200])
+
+tools, calls, base, _cfg = new_tools(False)
+tools.w.setdefault("allowed_users", {})["user_admin2"] = "复核管理员"
+text, card, ctx = propose(tools)
+code, rec = only(tools)
+rec["dual"] = True
+tools.pending[code] = rec
+tools._update_pending(code, rec)
+first = tools.confirm(code, actor(mid="msg_dual1"))
+swap_argv(tools.pending[code], "周报", "被调包")
+tools._update_pending(code, tools.pending[code])
+second = tools.review(code, actor(user="user_admin2", mid="msg_dual2"))
+check("双人复核在执行前仍核对参数，改过就不执行",
+      "第一位确认已记下" in first and not calls and "不一致" in second and code in tools.pending, first + "\n" + second)
 
 # ---------- 审计脱敏 ----------
 tools, calls, base, _cfg = new_tools(True, mode="button")
