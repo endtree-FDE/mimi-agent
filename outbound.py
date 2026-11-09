@@ -5,6 +5,8 @@ import guard
 from tools import _CMD_UNSAFE, parse_cli_json, run_capture
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+# 和 usage.classify_send 同一条。41050 是没有私聊权限，重试不会好。
+_PERMANENT_SEND = re.compile(r"41050|no user authority", re.I)
 _AT_TAG = re.compile(r"<\s*/?\s*at\b[^>]*>", re.I | re.S)
 # 中文紧挨着 @ 也要拿掉。@allocation 这种英文单词留下。
 _AT_ALL = re.compile(r"@(?:所有人|全员|_all|all)(?![A-Za-z0-9_])", re.I)
@@ -44,9 +46,25 @@ def idem_key(material):
     return "k" + digest
 
 
+def _cli_failure(parsed, out, err):
+    """命令已返回、但没发出去。权限类记 dead，其余明确失败仍是 fail，由周报去退避。"""
+    parts = []
+    if isinstance(parsed, dict):
+        try:
+            parts.append(json.dumps(parsed, ensure_ascii=False))
+        except Exception:
+            parts.append("")
+    parts.append(out or "")
+    parts.append(err or "")
+    if _PERMANENT_SEND.search("\n".join(parts)):
+        return "dead"
+    return "fail"
+
+
 def send(exe, profile, kind, target, text, key, names, tmp_dir, timeout=20, run=None):
-    """kind 是 user（私聊 open_id）或 chat（群）。返回 ok / fail / unknown。
-    unknown 表示超时或没看懂结果，调用方应按「可能已经发出」处理，避免再发一条。"""
+    """kind 是 user（私聊 open_id）或 chat（群）。返回 ok / fail / unknown / dead。
+    unknown 表示超时或没看懂结果，调用方应按「可能已经发出」处理，避免再发一条。
+    dead 是飞书 41050（没有私聊权限），调用方不要再试。"""
     text = prepare(text, names)
     if not text or mentions_everyone(text):
         return "fail"
@@ -65,7 +83,7 @@ def send(exe, profile, kind, target, text, key, names, tmp_dir, timeout=20, run=
         except OSError:
             return "fail"
         mode = os.environ.get("AGENTBOT_FAKE_SEND_RESULT") or "ok"
-        return mode if mode in ("ok", "fail", "unknown") else "ok"
+        return mode if mode in ("ok", "fail", "unknown", "dead") else "ok"
     os.makedirs(tmp_dir, exist_ok=True)
     name = "out_%s.json" % hashlib.sha256((key + target).encode("utf-8")).hexdigest()[:12]
     path = os.path.join(tmp_dir, name)
@@ -93,12 +111,12 @@ def send(exe, profile, kind, target, text, key, names, tmp_dir, timeout=20, run=
         if parsed.get("ok"):
             return "ok"
         if parsed.get("ok") is False:
-            return "fail"
+            return _cli_failure(parsed, out, err)
         code = getattr(result, "returncode", 1)
         if code == 0 and '"message_id"' in out:
             return "ok"
         if code not in (0, None):
-            return "fail"
+            return _cli_failure(parsed, out, err)
         return "unknown"
     finally:
         try:

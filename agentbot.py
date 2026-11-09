@@ -2298,7 +2298,7 @@ def _outbound_send(kind, target, text, key):
     except Exception:
         log.exception("outbound send failed")
         return "fail"
-    return result if result in ("ok", "fail", "unknown") else "fail"
+    return result if result in ("ok", "fail", "unknown", "dead") else "fail"
 
 def _growth_model(prompt):
     """整理只调用一次模型，不走工具循环。关掉成长时 tick 不会进来。"""
