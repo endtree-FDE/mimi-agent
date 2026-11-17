@@ -7,7 +7,7 @@
 #   Zep / Graphiti：事实带来源、有效期，被新事实取代后留下旧的。
 #   Generative Agents：隔一段时间反思最近的对话，而不是每一句都记。
 import datetime, hashlib, json, os, re, threading, time
-import guard, memory
+import confirm_mode, guard, memory
 from digest import day_key, in_window, local_now, zone
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
@@ -536,7 +536,34 @@ def _save_book(base, book):
     _write_json(_book_path(base), book)
 
 
-def _gc_book(book, now):
+def _stamp(value):
+    try:
+        return "%.3f" % float(value)
+    except (TypeError, ValueError):
+        return ""
+
+
+def _growth_digest(rec):
+    """钉住将要写入的记忆提案。used 是处理完的标记，不进摘要。
+    不读记录里自带的 param_digest，只按这些字段现算。"""
+    rec = rec if isinstance(rec, dict) else {}
+    payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
+    approvers = rec.get("approvers") if isinstance(rec.get("approvers"), list) else []
+    blob = {
+        "v": 1,
+        "chat_id": str(rec.get("chat_id") or ""),
+        "op": str(rec.get("op") or ""),
+        "approvers": [str(x) for x in approvers],
+        "deliver": str(rec.get("deliver") or ""),
+        "scope": str(rec.get("scope") or ""),
+        "kind": str(rec.get("kind") or ""),
+        "expires_at": _stamp(rec.get("expires_at")),
+        "payload": payload,
+    }
+    return confirm_mode.param_digest_blob(blob)
+
+
+def _gc_book(book, now, base=""):
     kept = {}
     for code, rec in (book.get("codes") or {}).items():
         if not isinstance(rec, dict):
@@ -548,7 +575,10 @@ def _gc_book(book, now):
         if now > exp + 86400:
             continue
         kept[code] = rec
+    removed = [code for code in (book.get("codes") or {}) if code not in kept]
     book["codes"] = kept
+    for code in removed:
+        confirm_mode.seal_drop(base, "growth", code)
 
 
 def _new_code(book):
@@ -571,7 +601,7 @@ def issue(base, chat_id, proposals, opt, now, approvers=None, deliver=None, scop
     issued = []
     with _lock(path):
         book = _load_book(base)
-        _gc_book(book, now)
+        _gc_book(book, now, base)
         for item in proposals:
             code = _new_code(book)
             if not code:
@@ -583,6 +613,13 @@ def issue(base, chat_id, proposals, opt, now, approvers=None, deliver=None, scop
                 "deliver": deliver, "scope": str(scope or ""), "kind": kind,
                 "created": now, "expires_at": now + ttl, "used": False, "payload": payload,
             }
+            try:
+                rec = json.loads(json.dumps(rec, ensure_ascii=False))
+            except (TypeError, ValueError):
+                break
+            # 封条在独立表里。只改账本正文重算不出同一份摘要。写不进去就不发这个码。
+            if not confirm_mode.seal_put(base, "growth", code, _growth_digest(rec), now):
+                break
             book["codes"][code] = rec
             shown = dict(item)
             shown["code"] = code
@@ -639,7 +676,7 @@ def decide(base, gmem, action, code, ctx, edit=None, now=None, names=(), rules=(
     path = _book_path(base)
     with _lock(path):
         book = _load_book(base)
-        _gc_book(book, now)
+        _gc_book(book, now, base)
         rec = book["codes"].get(code)
         if not rec:
             _save_book(base, book)
@@ -653,10 +690,21 @@ def decide(base, gmem, action, code, ctx, edit=None, now=None, names=(), rules=(
         if not _bind_ok(rec, ctx):
             _save_book(base, book)
             return "只有审批人本人在指定的会话里才能处理。没有写入。"
+        if action in ("approve", "edit"):
+            why = confirm_mode.seal_check(base, "growth", code, _growth_digest(rec))
+            if why != "ok":
+                try:
+                    gmem._audit(rec.get("chat_id"), (ctx or {}).get("user"), "write_denied", [],
+                                {"err": "param_digest", "detail": why if why in ("mismatch", "missing") else "mismatch"})
+                except Exception:
+                    pass
+                _save_book(base, book)
+                return confirm_mode.PARAM_PIN_MSG
         payload = dict(rec.get("payload") or {})
         if action == "reject":
             rec["used"] = True
             book["codes"][code] = rec
+            confirm_mode.seal_drop(base, "growth", code)
             _save_book(base, book)
             fid = payload.get("id") if payload.get("op") in ("update", "retire", "forget") else None
             try:
@@ -686,6 +734,7 @@ def decide(base, gmem, action, code, ctx, edit=None, now=None, names=(), rules=(
             return "没有写入。"
         rec["used"] = True
         book["codes"][code] = rec
+        confirm_mode.seal_drop(base, "growth", code)
         _save_book(base, book)
     if action == "reject":
         return "已驳回，没有写入。"

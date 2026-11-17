@@ -738,6 +738,92 @@ check("长连接里的卡片回调：别人点、篡改都不执行，本人点�
       and out.count("[fake-lark] docs +create") == 1 and "[dry-run] patch-card" in out
       and "已确认" in out, out[-2000:])
 
+# ---------- 「/忘记全部」钉住将要删除的那一批 ----------
+import memory as _memory_mod
+
+
+def _clear_gm(prefix):
+    base = tempfile.mkdtemp(prefix=prefix)
+    cfg = {"memory": {"enabled": True}, "write": {"allowed_users": {"user_admin": "管理员"}}}
+    return base, _memory_mod.GroupMemory(cfg, base, ["杭州某某科技有限公司"])
+
+
+def _clear_ctx(chat, scope=""):
+    return {"user": "user_admin", "chat_id": chat, "chat_type": "group", "message_id": "mclear1", "scope": scope}
+
+
+def _facts_path(base, chat):
+    return os.path.join(base, "memory", "groups", chat, "facts.jsonl")
+
+
+m_base, gm_clear = _clear_gm("confirm_clear_")
+m_ctx = _clear_ctx("chat_clear1")
+gm_clear.handle("记一下：周五交周报", m_ctx)
+ask_clear = gm_clear.handle("/忘记全部", m_ctx)
+m_code = re.search(r"确认清空 (\d{6})", ask_clear).group(1)
+seal_id = gm_clear._clear_seal_id("chat_clear1", "user_admin", "", m_code)
+check("清空确认的指纹在独立表里，不单靠进程内记录",
+      bool(confirm_mode.seal_get(m_base, "forget", seal_id)) and len(gm_clear._pending[("chat_clear1", "user_admin", "")]) == 2)
+with open(_facts_path(m_base, "chat_clear1"), "a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"id": "g-9999", "status": "active", "content": "本机追加条目"}, ensure_ascii=False) + "\n")
+clear_blocked = gm_clear.handle("确认清空 %s" % m_code, m_ctx)
+clear_pending = gm_clear._pending.get(("chat_clear1", "user_admin", ""))
+ledger = open(_facts_path(m_base, "chat_clear1"), encoding="utf-8").read()
+audit_path = os.path.join(m_base, "memory", "_audit", "memory-audit.jsonl")
+audit_blob = open(audit_path, encoding="utf-8").read() if os.path.isfile(audit_path) else ""
+check("清空前账本被增改则拒绝清空、不消费确认码，口径与写入提案对齐",
+      clear_blocked == confirm_mode.CLEAR_PIN_MSG and "周五交周报" in ledger and "本机追加条目" in ledger
+      and clear_pending and clear_pending[0] == m_code
+      and '"err": "param_digest"' in audit_blob and '"detail": "mismatch"' in audit_blob
+      and "本机追加条目" not in audit_blob, clear_blocked)
+ask_clear2 = gm_clear.handle("/忘记全部", m_ctx)
+m_code2 = re.search(r"确认清空 (\d{6})", ask_clear2).group(1)
+clear_ok2 = gm_clear.handle("确认清空 %s" % m_code2, m_ctx)
+left = [ln for ln in open(_facts_path(m_base, "chat_clear1"), encoding="utf-8").read().splitlines() if ln.strip()]
+check("对不上之后重新发「/忘记全部」，按当前账本能清空",
+      clear_ok2.startswith("已清空本群记忆") and left == [], clear_ok2)
+
+m_base2, gm_clear2 = _clear_gm("confirm_clear_ok_")
+m_ctx2 = _clear_ctx("chat_clear2")
+gm_clear2.handle("记一下：周一开例会", m_ctx2)
+ask_b = gm_clear2.handle("/忘记全部", m_ctx2)
+m_code_b = re.search(r"确认清空 (\d{6})", ask_b).group(1)
+rows_path = _facts_path(m_base2, "chat_clear2")
+rows = [json.loads(ln) for ln in open(rows_path, encoding="utf-8").read().splitlines() if ln.strip()]
+for row in rows:
+    row["last_seen"] = "2099-01-01"
+with open(rows_path, "w", encoding="utf-8") as handle:
+    for row in rows:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+clear_ok_b = gm_clear2.handle("确认清空 %s" % m_code_b, m_ctx2)
+check("只改 last_seen 不会让清空确认被拒", clear_ok_b.startswith("已清空本群记忆"), clear_ok_b)
+
+m_base3, gm_clear3 = _clear_gm("confirm_clear_bp_")
+m_ctx3 = _clear_ctx("chat_clear3")
+gm_clear3.handle("记一下：周三评审", m_ctx3)
+ask_c = gm_clear3.handle("/忘记全部", m_ctx3)
+m_code_c = re.search(r"确认清空 (\d{6})", ask_c).group(1)
+pinned = os.path.join(m_base3, "memory", "groups", "chat_clear3", "GROUP.base.md")
+with open(pinned, "w", encoding="utf-8") as handle:
+    handle.write("# 群档案\n确认前被换掉的置顶档案\n")
+clear_blocked_c = gm_clear3.handle("确认清空 %s" % m_code_c, m_ctx3)
+check("置顶档案被换掉时拒绝清空，且不删除该档案",
+      clear_blocked_c == confirm_mode.CLEAR_PIN_MSG and os.path.isfile(pinned)
+      and "周三评审" in open(_facts_path(m_base3, "chat_clear3"), encoding="utf-8").read(), clear_blocked_c)
+
+m_base4, gm_clear4 = _clear_gm("confirm_clear_miss_")
+m_ctx4 = _clear_ctx("chat_clear4")
+gm_clear4.handle("记一下：周四站会", m_ctx4)
+ask_d = gm_clear4.handle("/忘记全部", m_ctx4)
+m_code_d = re.search(r"确认清空 (\d{6})", ask_d).group(1)
+confirm_mode.seal_drop(m_base4, "forget", gm_clear4._clear_seal_id("chat_clear4", "user_admin", "", m_code_d))
+clear_missing = gm_clear4.handle("确认清空 %s" % m_code_d, m_ctx4)
+miss_audit = open(os.path.join(m_base4, "memory", "_audit", "memory-audit.jsonl"), encoding="utf-8").read()
+check("清空指纹缺失时拒绝清空，不把没钉住的旧确认放行",
+      clear_missing == confirm_mode.CLEAR_PIN_MSG
+      and "周四站会" in open(_facts_path(m_base4, "chat_clear4"), encoding="utf-8").read()
+      and '"detail": "missing"' in miss_audit, clear_missing)
+
 os.environ.pop("AGENTBOT_CARD_CALLBACK", None)
 failed = [name for name, ok in results if not ok]
 print("%d passed, %d failed" % (len(results) - len(failed), len(failed)))

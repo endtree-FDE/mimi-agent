@@ -3469,6 +3469,46 @@ check("确认码过期后不写入", "过期" in _late_msg and _raw_ed.count("�
 _rej = _mg.issue(_GB, _GA, [_edit_item], _opt, time.time())[0]
 _rej_msg = _mg.decide(_GB, _gmG, "reject", _rej["code"], _ctx_p2p, now=time.time(), names=_GNAME, rules=_rules, cfg=_gcfg())
 check("驳回不写入", "已驳回" in _rej_msg and "先记一版" not in open(os.path.join(_exp_dir, "facts.jsonl"), encoding="utf-8").read(), _rej_msg)
+import confirm_mode as _cm
+_pin_item = {"op": "add", "type": "note", "subject": "封条", "content": "原文尾巴还在后半段", "confidence": 0.8,
+             "source": {"msgs": ["om_msg0002"], "day": "2026-10-19", "thread": "", "kind": "conversation", "chat": _GA}}
+_pin = _mg.issue(_GB, _GA, [_pin_item], _opt, time.time())[0]
+_pin_code = _pin["code"]
+_book_path = _mg._book_path(_GB)
+_book = json.load(open(_book_path, encoding="utf-8"))
+_book["codes"][_pin_code]["payload"]["content"] = "被本机改成另一句"
+_book["codes"][_pin_code]["param_digest"] = "ab" * 32
+json.dump(_book, open(_book_path, "w", encoding="utf-8"), ensure_ascii=False)
+_pin_blocked = _mg.decide(_GB, _gmG, "approve", _pin_code, _ctx_p2p, now=time.time(), names=_GNAME, rules=_rules, cfg=_gcfg())
+_book_after = json.load(open(_book_path, encoding="utf-8"))
+_facts_now = open(os.path.join(_exp_dir, "facts.jsonl"), encoding="utf-8").read()
+_growth_audit = open(os.path.join(_GB, "memory", "_audit", "memory-audit.jsonl"), encoding="utf-8").read()
+check("记忆提案正文被改后确认不写入、不把码用掉，拒绝文案用统一那句",
+      _pin_blocked == _cm.PARAM_PIN_MSG and _book_after["codes"][_pin_code].get("used") is False
+      and "被本机改成另一句" not in _facts_now and "原文尾巴还在后半段" not in _facts_now
+      and '"err": "param_digest"' in _growth_audit and '"detail": "mismatch"' in _growth_audit
+      and "被本机改成另一句" not in _growth_audit, _pin_blocked)
+_pin_rej = _mg.decide(_GB, _gmG, "reject", _pin_code, _ctx_p2p, now=time.time(), names=_GNAME, rules=_rules, cfg=_gcfg())
+check("记忆提案对不上时仍可驳回，驳回不写入",
+      "已驳回" in _pin_rej and "被本机改成另一句" not in open(os.path.join(_exp_dir, "facts.jsonl"), encoding="utf-8").read(), _pin_rej)
+_pin2 = _mg.issue(_GB, _GA, [_pin_item], _opt, time.time())[0]
+_cm.seal_drop(_GB, "growth", _pin2["code"])
+_pin_miss = _mg.decide(_GB, _gmG, "approve", _pin2["code"], _ctx_p2p, now=time.time(), names=_GNAME, rules=_rules, cfg=_gcfg())
+_book_miss = json.load(open(_book_path, encoding="utf-8"))
+check("记忆提案摘要缺失时拒绝且不把码用掉",
+      _pin_miss == _cm.PARAM_PIN_MSG and _book_miss["codes"][_pin2["code"]].get("used") is False
+      and '"detail": "missing"' in open(os.path.join(_GB, "memory", "_audit", "memory-audit.jsonl"), encoding="utf-8").read(),
+      _pin_miss)
+_ancient = {"code": "424242", "chat_id": _GA, "op": "add", "approvers": ["user_approver"], "deliver": "p2p",
+            "scope": "", "kind": "proposal", "created": time.time() - 200000, "expires_at": time.time() - 200000,
+            "used": False, "payload": {"op": "add", "content": "过期条目"}}
+_aged = _mg._load_book(_GB)
+_aged["codes"]["424242"] = _ancient
+_mg._save_book(_GB, _aged)
+_cm.seal_put(_GB, "growth", "424242", "a" * 64)
+_mg.issue(_GB, _GA, [_pin_item], _opt, time.time())
+check("过期清掉的记忆提案，摘要一起删",
+      "424242" not in _mg._load_book(_GB)["codes"] and _cm.seal_get(_GB, "growth", "424242") == "")
 _secret_fact = {"id": "g-0004", "scope": "group:" + _GA, "type": "note", "subject": "客户", "content": "素材在杭州某某科技有限公司", "short": "素材在杭州某某科技有限公司", "status": "active"}
 open(os.path.join(_exp_dir, "facts.jsonl"), "a", encoding="utf-8").write(json.dumps(_secret_fact, ensure_ascii=False) + "\n")
 _hit = _gmG.search(_GA, "group", "素材")

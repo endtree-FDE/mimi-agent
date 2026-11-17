@@ -19,7 +19,7 @@ def run_capture(cmd, cwd=None, timeout=60):
 
 _CMD_UNSAFE = re.compile(r'["&|<>^%!\r\n]')
 _ACTOR_RX = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
-_PARAM_PIN_MSG = "要执行的内容和提议时不一致，没有执行。请重新发起。"
+_PARAM_PIN_MSG = confirm_mode.PARAM_PIN_MSG
 
 def _actor_ok(ctx):
     """发送人和会话都必须是非空的普通编号。空、问号或带路径的值不能发起或确认。"""
@@ -1368,8 +1368,9 @@ class Tools:
         try:
             self._state_db().execute("delete from used_writes where ts < ?", (time.time() - 86400,))
             self._state_db().execute("delete from used_confirm_tokens where ts < ?", (time.time() - 86400,))
+            # 带冒号的是开关、记忆成长、意向和清空记忆的摘要，由各自的过期清理删。这里只扫写入提案的裸码。
             self._state_db().execute(
-                "delete from write_param_seals where ts < ? and code not in (select code from pending_writes)",
+                "delete from write_param_seals where ts < ? and code not in (select code from pending_writes) and instr(code, ':') = 0",
                 (time.time() - 86400,))
             self._state_db().commit()
         except Exception:

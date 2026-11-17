@@ -8,7 +8,7 @@ import datetime, json, os, shutil, sys, tempfile
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, FW)
 import utf8io  # noqa: F401
-import intake_notify
+import confirm_mode, intake_notify
 
 results = []
 
@@ -357,6 +357,68 @@ with _Dir() as base:
     check("换到本地第二天才放开，而且按配的时区换日不是按 UTC",
           rolled["reason"] == "notified" and rolled["new"] == 2 and len(sent.kinds("user")) == 3,
           json.dumps(rolled))
+
+# ---- 发意向：待确认正文被改则不发群、不消费；不发意向仍可用；缺摘要拒绝 ----
+with _Dir() as base:
+    sent, code, got = _issue(_cfg(), base, ["甲", "乙"])
+    state_path = intake_notify._state_path(base)
+    st = json.load(open(state_path, encoding="utf-8"))
+    sealed = confirm_mode.seal_get(base, "intake", code)
+    same = intake_notify._intake_digest(st["codes"][code])
+    flipped = dict(st["codes"][code], used=True)
+    check("意向提醒落在独立表里，账本正文没有 seals，used 不改变摘要",
+          got["reason"] == "notified" and sealed and sealed == same
+          and intake_notify._intake_digest(flipped) == same and "seals" not in st, str(got))
+    st["codes"][code]["chats"] = ["oc_evil_group"]
+    st["codes"][code]["param_digest"] = sealed
+    with open(state_path, "w", encoding="utf-8") as handle:
+        json.dump(st, handle, ensure_ascii=False)
+    blocked = _ht(_cfg(), base, "发意向 %s" % code, CTX_OK, sent, served=[CHAT, "oc_evil_group"])
+    st_after = json.load(open(state_path, encoding="utf-8"))
+    audit_path = os.path.join(base, "logs", "intake_notify.jsonl")
+    audit = open(audit_path, encoding="utf-8").read() if os.path.isfile(audit_path) else ""
+    check("意向目标被改后不发群、不消费，拒绝文案用统一那句",
+          blocked == confirm_mode.PARAM_PIN_MSG and sent.kinds("chat") == []
+          and st_after["codes"][code].get("used") is False
+          and '"err": "param_digest"' in audit and '"detail": "mismatch"' in audit
+          and code not in audit and "oc_evil_group" not in audit, str(blocked) + "\n" + audit)
+    cancelled = _ht(_cfg(), base, "不发意向 %s" % code, CTX_OK, sent, served=[CHAT, "oc_evil_group"])
+    st_cancel = json.load(open(state_path, encoding="utf-8"))
+    check("记录对不上时仍可回「不发意向」，不发群且该码作废",
+          cancelled is not None and "没发" in cancelled and sent.kinds("chat") == []
+          and st_cancel["codes"][code].get("used") is True, str(cancelled))
+
+with _Dir() as base:
+    sent, code, _got = _issue(_cfg(), base, ["甲"])
+    confirm_mode.seal_drop(base, "intake", code)
+    blocked = _ht(_cfg(), base, "发意向 %s" % code, CTX_OK, sent, served=[CHAT])
+    st_after = json.load(open(intake_notify._state_path(base), encoding="utf-8"))
+    audit = open(os.path.join(base, "logs", "intake_notify.jsonl"), encoding="utf-8").read()
+    check("意向摘要缺失时不发群、不消费，审计 detail 为 missing",
+          blocked == confirm_mode.PARAM_PIN_MSG and sent.kinds("chat") == []
+          and st_after["codes"][code].get("used") is False and '"detail": "missing"' in audit, str(blocked))
+    st_after["codes"][code]["expires_at"] = T0 - 200000
+    with open(intake_notify._state_path(base), "w", encoding="utf-8") as handle:
+        json.dump(st_after, handle)
+    confirm_mode.seal_put(base, "intake", code, "a" * 64)
+    kept = intake_notify._gc_codes(st_after["codes"], T0, base)
+    check("过期清掉的意向确认，摘要一起删",
+          code not in kept and confirm_mode.seal_get(base, "intake", code) == "")
+
+with _Dir() as base:
+    saved = confirm_mode.seal_put
+    confirm_mode.seal_put = lambda *args, **kwargs: False
+    sent = Sender()
+    try:
+        _fill(base, ["甲", "乙"])
+        got = intake_notify.tick(_cfg(), base, NAMES, T0, sent)
+    finally:
+        confirm_mode.seal_put = saved
+    state_path = intake_notify._state_path(base)
+    stored = json.load(open(state_path, encoding="utf-8")) if os.path.isfile(state_path) else {}
+    check("意向摘要写不进去时不发提醒、不落确认码",
+          got.get("reason") == "seal_failed" and sent.calls == [] and not (stored.get("codes") or {}),
+          json.dumps(got, ensure_ascii=False))
 
 print("\n%d/%d passed" % (sum(1 for _, ok in results if ok), len(results)))
 sys.exit(0 if all(ok for _, ok in results) else 1)

@@ -1,6 +1,6 @@
 # 写入确认方式。默认点卡片上的按钮。飞书没开通卡片回调时，自动改用确认码。
 # 确认不能关掉。高风险动作可以单独指定一种方式。
-import hashlib, hmac, json, os, re, secrets, time
+import hashlib, hmac, json, os, re, secrets, sqlite3, time
 
 CARD_EVENT = "card.action.trigger"
 MODES = ("button", "code", "button_or_code", "button_and_code")
@@ -349,6 +349,118 @@ def digest_equal(left, right):
     if not a or len(a) != len(b):
         return False
     return hmac.compare_digest(a, b)
+
+
+# 写入提案对不上时给发起人的那一句。别的确认路径也用这一句，避免各说各的。
+PARAM_PIN_MSG = "要执行的内容和提议时不一致，没有执行。请重新发起。"
+# 「/忘记全部」不是写入提案。口径对齐上面那句，但要说清没有清空、请重新发命令。
+CLEAR_PIN_MSG = "要清空的内容和提议时不一致，没有清空。请重新发「/忘记全部」。"
+
+# 和写入提案共用 state/state.db 的 write_param_seals。写入提案的码不加前缀，这里的范围必须带前缀，避免撞车。
+_SEAL_SCOPES = ("switch", "growth", "intake", "forget")
+
+
+def param_digest_blob(blob):
+    """把调用方挑好的、真正会执行的字段钉成摘要。进度字段不要放进来。
+    算不出来返回空串，调用方按对不上处理，不能当成通过。"""
+    if not isinstance(blob, dict) or not blob:
+        return ""
+    try:
+        raw = json.dumps(blob, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return ""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def seal_store_key(scope, code):
+    """范围加在码前面。拒绝给写入提案用的裸码，也拒绝再嵌一层冒号。"""
+    scope = str(scope or "")
+    code = str(code or "")
+    if scope not in _SEAL_SCOPES or not code or ":" in code:
+        return ""
+    return scope + ":" + code
+
+
+def _seal_db(base):
+    folder = os.path.join(base, "state")
+    os.makedirs(folder, exist_ok=True)
+    conn = sqlite3.connect(os.path.join(folder, "state.db"), timeout=5, check_same_thread=False)
+    conn.execute("create table if not exists write_param_seals(code text primary key, digest text not null, ts real)")
+    return conn
+
+
+def seal_put(base, scope, code, digest, ts=None):
+    """把摘要写入独立表。写不进去、摘要是空的、或这个码已经有另一份摘要，都返回 False。
+    调用方不得在失败时仍把待确认落盘。已有的不覆盖。"""
+    key = seal_store_key(scope, code)
+    digest = str(digest or "")
+    if not base or not key or not digest:
+        return False
+    conn = None
+    try:
+        conn = _seal_db(base)
+        conn.execute(
+            "insert into write_param_seals(code, digest, ts) values(?,?,?)",
+            (key, digest, time.time() if ts is None else float(ts)))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    except (sqlite3.Error, OSError, TypeError, ValueError):
+        try:
+            if conn is not None:
+                conn.rollback()
+        except sqlite3.Error:
+            pass
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def seal_get(base, scope, code):
+    """只读独立表。读不到就返回空串，调用方按缺失拒绝。"""
+    key = seal_store_key(scope, code)
+    if not base or not key:
+        return ""
+    conn = None
+    try:
+        conn = _seal_db(base)
+        row = conn.execute("select digest from write_param_seals where code=?", (key,)).fetchone()
+    except (sqlite3.Error, OSError):
+        return ""
+    finally:
+        if conn is not None:
+            conn.close()
+    if not row or not row[0]:
+        return ""
+    return str(row[0])
+
+
+def seal_drop(base, scope, code):
+    key = seal_store_key(scope, code)
+    if not base or not key:
+        return
+    conn = None
+    try:
+        conn = _seal_db(base)
+        conn.execute("delete from write_param_seals where code=?", (key,))
+        conn.commit()
+    except (sqlite3.Error, OSError):
+        pass
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def seal_check(base, scope, code, digest):
+    """对照独立表。返回 ok、missing 或 mismatch。不读记录里自带的摘要字段。"""
+    sealed = seal_get(base, scope, code)
+    if not sealed:
+        return "missing"
+    if digest and digest_equal(sealed, digest):
+        return "ok"
+    return "mismatch"
 
 
 def impact(name, notify=False):

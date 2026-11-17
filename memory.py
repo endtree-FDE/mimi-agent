@@ -8,8 +8,8 @@
 # 文件布局：<base_dir>/memory/groups/<chat_id>/GROUP.md（由 facts.jsonl 生成的精简档案，注入用）
 #           <base_dir>/memory/groups/<chat_id>/facts.jsonl（事实账本，一行一条）、meta.json（下一个编号）
 #           <base_dir>/memory/_audit/memory-audit.jsonl（谁、何时、记了/删了哪个编号；删除不留内容）
-import os, re, json, time, random, threading, datetime
-import guard
+import hashlib, os, re, json, time, random, threading, datetime
+import confirm_mode, guard
 
 _CHAT_RX = re.compile(r"^[A-Za-z0-9_-]{1,80}$")  # 只允许字母数字、下划线、短横线，挡住 ../ 这类路径穿越。飞书群编号和 REPLACE_ 占位符都符合。
 TYPE_ZH = {"person": "成员与分工", "project": "项目与进展", "decision": "已定的事", "deadline": "截止与时间点", "rule": "规则与约束",
@@ -57,6 +57,7 @@ class GroupMemory:
         m = cfg.get("memory") or {}
         self.cfg = cfg
         self.enabled = bool(m.get("enabled", False))
+        self.base = base
         self.root = os.path.join(base, m.get("dir", "memory"))
         self.budget = max(200, int(m.get("profile_budget_chars", 1500)))
         self.max_fact = int(m.get("max_fact_chars", 300))
@@ -366,17 +367,57 @@ class GroupMemory:
         self._write_all(chat, rest); self._audit(chat, user, "forget", [hit[0]["id"]])
         return "已删除 #%d，以后不会再用到它。" % n
 
+    def _clear_seal_id(self, chat, user, scope, code):
+        raw = "%s\n%s\n%s\n%s" % (chat, user, scope or "", code)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _clear_fingerprint(self, chat):
+        """提议清空时钉住将要删的这一批：事实去掉 last_seen，再加上置顶档案的原文指纹。
+        指纹进独立表，不单放在进程里的待确认记录上。"""
+        view = []
+        for fact in self.facts(chat):
+            if isinstance(fact, dict):
+                view.append({k: v for k, v in fact.items() if k != "last_seen"})
+            else:
+                view.append(fact)
+        pinned = ""
+        folder = self.gdir(chat) or ""
+        bp = os.path.join(folder, "GROUP.base.md") if folder else ""
+        if bp and os.path.isfile(bp):
+            try:
+                with open(bp, "rb") as handle:
+                    pinned = hashlib.sha256(handle.read()).hexdigest()
+            except OSError:
+                pinned = ""
+        return confirm_mode.param_digest_blob({"v": 1, "facts": view, "pinned": pinned})
+
     def _ask_clear(self, chat, user, scope=""):
         n = sum(1 for x in self.facts(chat) if x.get("status", "active") == "active")
         if not n: return "本群没有可清空的记忆。"
+        key = (chat, user, scope or "")
+        old = self._pending.get(key)
         code = "%06d" % random.SystemRandom().randint(0, 999999)
-        self._pending[(chat, user, scope or "")] = (code, time.time() + 300)
+        fp = self._clear_fingerprint(chat)
+        seal_id = self._clear_seal_id(chat, user, scope, code)
+        if not fp or not confirm_mode.seal_put(self.base, "forget", seal_id, fp):
+            return "暂时发不出确认，请再发一次「/忘记全部」。"
+        if old:
+            confirm_mode.seal_drop(self.base, "forget", self._clear_seal_id(chat, user, scope, old[0]))
+        self._pending[key] = (code, time.time() + 300)
         return "确定要清空本群全部 %d 条记忆吗？清空后不能恢复。5 分钟内回复「确认清空 %s」继续，不回复就不清空。" % (n, code)
 
     def _clear(self, chat, user, code, scope=""):
-        p = self._pending.get((chat, user, scope or ""))
+        key = (chat, user, scope or "")
+        p = self._pending.get(key)
         if not p or p[1] < time.time() or p[0] != code: return "确认码不对或已过期，没有清空。需要的话请重新发「/忘记全部」。"
-        self._pending.pop((chat, user, scope or ""), None)
+        seal_id = self._clear_seal_id(chat, user, scope, code)
+        why = confirm_mode.seal_check(self.base, "forget", seal_id, self._clear_fingerprint(chat))
+        if why != "ok":
+            detail = why if why in ("mismatch", "missing") else "mismatch"
+            self._audit(chat, user, "write_denied", [], {"err": "param_digest", "detail": detail})
+            return confirm_mode.CLEAR_PIN_MSG
+        self._pending.pop(key, None)
+        confirm_mode.seal_drop(self.base, "forget", seal_id)
         facts = self.facts(chat); ids = [x["id"] for x in facts]
         bp = os.path.join(self.gdir(chat), "GROUP.base.md")
         if os.path.isfile(bp): os.remove(bp)

@@ -1,10 +1,10 @@
 # 私聊开关：权限、确认码、备份回滚、重启只留一个进程、失败提示。不连飞书。
-import json, os, shutil, subprocess, sys, tempfile
+import json, os, shutil, sqlite3, subprocess, sys, tempfile
 
 FW = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, FW)
 import utf8io  # noqa: F401
-import feature_switch
+import confirm_mode, feature_switch
 
 results = []
 
@@ -717,6 +717,129 @@ check("仓库里的示例卡片和确认态都是这张紧凑卡，没有真实�
       and "sheet-histogram_outlined" in shown and "📊" not in shown
       and "example-token-not-real" in sample and "ou_" not in sample and "secret" not in sample.lower())
 
+
+# ---------- 开关待确认也钉摘要：调包不执行、不消费；取消和进度更新不受影响 ----------
+os.environ["AGENTBOT_CARD_CALLBACK"] = "0"
+base, path = workdir()
+try:
+    feature_switch.handle_text(CFG, base, "设置", OWNER, cfg_path=path)
+    proposed = feature_switch.handle_text(CFG, base, "打开用量周报", OWNER, cfg_path=path)
+    code = [line.split()[-1] for line in (proposed["text"] if proposed else "").splitlines() if line.startswith("确认 ")][0]
+    sealed = confirm_mode.seal_get(base, "switch", code)
+    db = os.path.join(base, "state", "switches.db")
+    conn = sqlite3.connect(db)
+    raw = conn.execute("select payload from pending_switches where code=?", (code,)).fetchone()[0]
+    rec = json.loads(raw)
+    rec["button_ok"] = True
+    rec["code_ok"] = True
+    rec["superseded"] = True
+    conn.execute("update pending_switches set payload=? where code=?", (json.dumps(rec, ensure_ascii=False), code))
+    conn.commit()
+    conn.close()
+    progressed = feature_switch.try_confirm(CFG, base, path, code, OWNER, apply=True, check=lambda _p: ([], []))
+    turned = json.load(open(path, encoding="utf-8"))
+    check("开关确认过程里的进度字段不进摘要，原目标仍能确认",
+          progressed and progressed.get("restart") and turned["report"]["enabled"] is True
+          and turned["alerts"]["enabled"] is False and bool(sealed), progressed["text"] if progressed else "")
+finally:
+    shutil.rmtree(base, ignore_errors=True)
+
+base, path = workdir()
+try:
+    feature_switch.handle_text(CFG, base, "设置", OWNER, cfg_path=path)
+    proposed = feature_switch.handle_text(CFG, base, "打开用量周报", OWNER, cfg_path=path)
+    code = [line.split()[-1] for line in proposed["text"].splitlines() if line.startswith("确认 ")][0]
+    db = os.path.join(base, "state", "switches.db")
+    conn = sqlite3.connect(db)
+    rec = json.loads(conn.execute("select payload from pending_switches where code=?", (code,)).fetchone()[0])
+    rec["feature"] = "../secrets/杭州客户"
+    rec["on"] = True
+    rec["param_digest"] = "f" * 64
+    conn.execute("update pending_switches set payload=? where code=?", (json.dumps(rec, ensure_ascii=False), code))
+    conn.commit()
+    conn.close()
+    denied = feature_switch.try_confirm(CFG, base, path, code, OWNER, apply=True, check=lambda _p: ([], []))
+    after = json.load(open(path, encoding="utf-8"))
+    conn = sqlite3.connect(db)
+    used = conn.execute("select count(*) from used_switches where code=?", (code,)).fetchone()[0]
+    still = json.loads(conn.execute("select payload from pending_switches where code=?", (code,)).fetchone()[0])
+    conn.close()
+    log_path = os.path.join(base, "logs", "feature_switch.jsonl")
+    log_text = open(log_path, encoding="utf-8").read() if os.path.isfile(log_path) else ""
+    check("开关记录被调包后不改配置、不消费确认码，拒绝文案用统一那句",
+          denied and denied.get("text") == confirm_mode.PARAM_PIN_MSG and not denied.get("restart")
+          and after["report"]["enabled"] is False and used == 0 and still.get("feature") == "../secrets/杭州客户"
+          and '"err": "param_digest"' in log_text and '"detail": "mismatch"' in log_text
+          and "杭州客户" not in log_text and code not in log_text and "ou_owner1" not in log_text,
+          (denied or {}).get("text", "") + "\n" + log_text[-800:])
+    cancelled = feature_switch.try_confirm(CFG, base, path, code, OWNER, cancel=True, apply=True)
+    check("开关被拦后仍可取消，取消不写配置",
+          cancelled and "已取消" in cancelled["text"] and not cancelled.get("restart")
+          and json.load(open(path, encoding="utf-8"))["report"]["enabled"] is False,
+          cancelled["text"] if cancelled else "")
+finally:
+    shutil.rmtree(base, ignore_errors=True)
+
+base, path = workdir()
+try:
+    feature_switch.handle_text(CFG, base, "设置", OWNER, cfg_path=path)
+    proposed = feature_switch.handle_text(CFG, base, "打开断线提醒", OWNER, cfg_path=path)
+    code = [line.split()[-1] for line in proposed["text"].splitlines() if line.startswith("确认 ")][0]
+    confirm_mode.seal_drop(base, "switch", code)
+    missing = feature_switch.try_confirm(CFG, base, path, code, OWNER, apply=True, check=lambda _p: ([], []))
+    conn = sqlite3.connect(os.path.join(base, "state", "switches.db"))
+    used = conn.execute("select count(*) from used_switches where code=?", (code,)).fetchone()[0]
+    conn.close()
+    log_text = open(os.path.join(base, "logs", "feature_switch.jsonl"), encoding="utf-8").read()
+    check("开关摘要缺失时拒绝且不消费，审计 detail 为 missing",
+          missing and missing.get("text") == confirm_mode.PARAM_PIN_MSG and not missing.get("restart")
+          and used == 0 and json.load(open(path, encoding="utf-8"))["alerts"]["enabled"] is False
+          and '"detail": "missing"' in log_text, (missing or {}).get("text", ""))
+    saved = confirm_mode.seal_put
+    confirm_mode.seal_put = lambda *args, **kwargs: False
+    try:
+        again = feature_switch.handle_text(CFG, base, "打开用量周报", OWNER, cfg_path=path)
+    finally:
+        confirm_mode.seal_put = saved
+    conn = sqlite3.connect(os.path.join(base, "state", "switches.db"))
+    rows = conn.execute("select code, payload from pending_switches").fetchall()
+    conn.close()
+    report_rows = [row for row in rows if json.loads(row[1]).get("feature") == "report"]
+    check("摘要写不进去时开关提议失败，不会无封条落盘",
+          again and "暂时发不出确认码" in again["text"] and report_rows == [],
+          (again or {}).get("text", ""))
+finally:
+    shutil.rmtree(base, ignore_errors=True)
+
+both_cfg = json.loads(json.dumps(CFG))
+both_cfg["confirm"] = {"mode": "button_and_code", "high_risk_mode": "button_and_code"}
+os.environ["AGENTBOT_CARD_CALLBACK"] = "1"
+base, path = workdir()
+try:
+    feature_switch.handle_text(both_cfg, base, "设置", OWNER, cfg_path=path)
+    proposed = feature_switch.handle_text(both_cfg, base, "打开用量周报", OWNER, cfg_path=path)
+    code = ""
+    for line in (proposed["text"] if proposed else "").splitlines():
+        if "确认 " in line and line.strip().split()[-1].isdigit():
+            code = line.strip().split()[-1]
+    conn = sqlite3.connect(os.path.join(base, "state", "switches.db"))
+    rec = json.loads(conn.execute("select payload from pending_switches where code=?", (code,)).fetchone()[0])
+    rec["on"] = False
+    rec["param_digest"] = confirm_mode.seal_get(base, "switch", code)
+    conn.execute("update pending_switches set payload=? where code=?", (json.dumps(rec, ensure_ascii=False), code))
+    conn.commit()
+    conn.close()
+    first = feature_switch.try_confirm(both_cfg, base, path, code, OWNER, apply=True, check=lambda _p: ([], []))
+    conn = sqlite3.connect(os.path.join(base, "state", "switches.db"))
+    held = json.loads(conn.execute("select payload from pending_switches where code=?", (code,)).fetchone()[0])
+    conn.close()
+    check("开关两样都要：回码这一步遇到调包不记下 code_ok，也不改配置",
+          first and first.get("text") == confirm_mode.PARAM_PIN_MSG and held.get("code_ok") is not True
+          and json.load(open(path, encoding="utf-8"))["report"]["enabled"] is False,
+          (first or {}).get("text", ""))
+finally:
+    os.environ["AGENTBOT_CARD_CALLBACK"] = "0"
+    shutil.rmtree(base, ignore_errors=True)
 
 if any(not ok for _name, ok in results):
     print("%d failed" % sum(1 for _n, ok in results if not ok))
