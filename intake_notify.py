@@ -199,18 +199,64 @@ def _body(items, names):
     return joined
 
 
-def _gc_codes(codes, now):
+def _stamp(value):
+    try:
+        return "%.3f" % float(value)
+    except (TypeError, ValueError):
+        return ""
+
+
+def _intake_digest(rec):
+    """钉住将要发到群里的这一批。used 是程序记下的终态，不进摘要。
+    不读记录里自带的 param_digest。"""
+    rec = rec if isinstance(rec, dict) else {}
+    blob = {
+        "v": 1,
+        "items": [str(x) for x in (rec.get("items") or [])],
+        "owners": [str(x) for x in (rec.get("owners") or [])],
+        "chats": [str(x) for x in (rec.get("chats") or [])],
+        "expires_at": _stamp(rec.get("expires_at")),
+    }
+    return confirm_mode.param_digest_blob(blob)
+
+
+def _audit_denied(base, detail):
+    if not base:
+        return
+    folder = os.path.join(base, "logs")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        row = {
+            "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+            "action": "write_denied",
+            "err": "param_digest",
+            "detail": detail if detail in ("mismatch", "missing") else "mismatch",
+            "ok": False,
+        }
+        with open(os.path.join(folder, "intake_notify.jsonl"), "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def _gc_codes(codes, now, base=""):
     kept = {}
+    removed = []
     for code, rec in (codes or {}).items():
         if not isinstance(rec, dict):
+            removed.append(code)
             continue
         try:
             expires = float(rec.get("expires_at") or 0)
         except (TypeError, ValueError):
+            removed.append(code)
             continue
         if now > expires + 86400:
+            removed.append(code)
             continue
         kept[code] = rec
+    for code in removed:
+        confirm_mode.seal_drop(base, "intake", code)
     return kept
 
 
@@ -268,15 +314,25 @@ def tick(cfg, base, names, now=None, sender=None, served=None, log=None):
             if total < spec["min_items"]:
                 return {"ok": True, "reason": "below_min", "new": total, "sent": 0}
             picked = items[:spec["max_items"]]
-            codes = _gc_codes(state.get("codes") or {}, now)
+            codes = _gc_codes(state.get("codes") or {}, now, base)
             code = _new_code(codes, spec["digits"])
             if not code:
                 return {"reason": "no_code", "new": 0, "sent": 0}
+            rec = {"code": code, "items": [x[0] for x in picked], "owners": spec["owners"],
+                   "chats": spec["chats"], "created": now, "expires_at": now + spec["ttl"],
+                   "used": False}
+            try:
+                rec = json.loads(json.dumps(rec, ensure_ascii=False))
+            except (TypeError, ValueError):
+                return {"reason": "seal_failed", "new": total, "sent": 0}
+            if not confirm_mode.seal_put(base, "intake", code, _intake_digest(rec), now):
+                return {"reason": "seal_failed", "new": total, "sent": 0}
             text = render_notice([x[1] for x in picked], total, len(picked), code, spec,
                                  max(1, int(spec["ttl"] / 60)))
             text = guard.neutralize(guard.redact(text, names))
             results = _send_owner(sender, spec, text, now)
             if "ok" not in results and "unknown" not in results:
+                confirm_mode.seal_drop(base, "intake", code)
                 # 一条都没发出去：不记提醒次数、不发确认码，但要把这件事留在账上——
                 # 线上那条 sender 是会失败的（健康告警自己的日志里就有发不出去的记录），
                 # 悄悄丢掉等于主人永远不知道有这批意向。
@@ -286,9 +342,7 @@ def tick(cfg, base, names, now=None, sender=None, served=None, log=None):
                     log.warning("intake_notify 提醒没发出去（连续第 %d 次），%d 条还留在待看里",
                                 state["failed"], total)
                 return {"reason": "send_failed", "new": total, "sent": 0}
-            codes[code] = {"code": code, "items": [x[0] for x in picked], "owners": spec["owners"],
-                           "chats": spec["chats"], "created": now, "expires_at": now + spec["ttl"],
-                           "used": False}
+            codes[code] = rec
             day = moment.strftime("%Y-%m-%d")
             notice_state = state.get("notices")
             count = notice_state if isinstance(notice_state, int) else 0
@@ -333,9 +387,9 @@ def is_command(cfg, text):
     return bool(spec["send_rx"].match(q) or spec["skip_rx"].match(q))
 
 
-def _decide(state, code, ctx, spec, now):
+def _decide(state, code, ctx, spec, now, base=""):
     """返回（记录, 说给人听的话）。话不为空时就是不发，调用方照原样回。"""
-    codes = _gc_codes(state.get("codes") or {}, now)
+    codes = _gc_codes(state.get("codes") or {}, now, base)
     rec = codes.get(str(code or ""))
     if not rec:
         return None, "确认码不对或已过期，没发。"
@@ -371,10 +425,16 @@ def handle_text(cfg, base, text, ctx, names, sender=None, served=None, now=None)
         with digest.outbound_lock(path):
             state = _record()
             state.update(_load(path))
-            rec, why = _decide(state, code, ctx, spec, now)
+            rec, why = _decide(state, code, ctx, spec, now, base)
             if why:
                 return why
+            if not skip:
+                why_seal = confirm_mode.seal_check(base, "intake", code, _intake_digest(rec))
+                if why_seal != "ok":
+                    _audit_denied(base, why_seal)
+                    return confirm_mode.PARAM_PIN_MSG
             rec["used"] = True
+            confirm_mode.seal_drop(base, "intake", code)
             handled = [str(x) for x in (state.get("handled") or [])]
             texts = _blocks_by_id(cfg, base, rec.get("items") or [])
             sent_chats = 0
@@ -383,7 +443,7 @@ def handle_text(cfg, base, text, ctx, names, sender=None, served=None, now=None)
                 if not targets:
                     # 这批意向还留在待看里（不进 handled），但这个码说作废就得真作废：
                     # 落盘 used，否则换个群再回同一个码还是能发出去。
-                    state.update({"codes": _gc_codes(state.get("codes") or {}, now)})
+                    state.update({"codes": _gc_codes(state.get("codes") or {}, now, base)})
                     _save(path, state)
                     return "那个群不在本实例的服务范围内，没发。确认码已作废。"
                 body = _body(texts, names)
@@ -400,7 +460,7 @@ def handle_text(cfg, base, text, ctx, names, sender=None, served=None, now=None)
                 for bid in (rec.get("items") or []):
                     if bid not in handled:
                         handled.append(bid)
-            state.update({"codes": _gc_codes(state.get("codes") or {}, now),
+            state.update({"codes": _gc_codes(state.get("codes") or {}, now, base),
                           "handled": handled[-_KEEP_HANDLED:]})
             _save(path, state)
     except TimeoutError:

@@ -1278,6 +1278,52 @@ def _offer(cfg, base, ctx, kind, feature_id, turn_on, summary, names, now, rende
     return _reply(text, card_body)
 
 
+def _stamp(value):
+    try:
+        return "%.3f" % float(value)
+    except (TypeError, ValueError):
+        return ""
+
+
+def _known_feature(feature_id):
+    """审计只留名单里的功能名。被改成路径或句子的值不写进日志。"""
+    feature_id = str(feature_id or "")
+    if feature_id in _BY_ID or feature_id in ("batch", "confirm_mode", "skill_evolve", "skill_rollback"):
+        return feature_id
+    return ""
+
+
+def _switch_digest(rec):
+    """钉住这次真正会改的开关。码已回、按钮已点、被新设置卡顶替，都不进这串。
+    不读记录里自带的 param_digest。"""
+    rec = rec if isinstance(rec, dict) else {}
+    changes = rec.get("changes") if isinstance(rec.get("changes"), list) else []
+    blob = {
+        "v": 1,
+        "user": str(rec.get("user") or ""),
+        "chat": str(rec.get("chat_id") or ""),
+        "scope": str(rec.get("scope") or ""),
+        "feature": str(rec.get("feature") or ""),
+        "on": True if rec.get("on") else False,
+        "set_mode": str(rec.get("set_mode") or ""),
+        "changes": changes,
+        "skill": str(rec.get("skill") or ""),
+        "sha256": str(rec.get("sha256") or ""),
+        "version": str(rec.get("version") or ""),
+        "op": str(rec.get("op") or ""),
+        "mode": str(rec.get("mode") or ""),
+        "expires": _stamp(rec.get("expires")),
+    }
+    return confirm_mode.param_digest_blob(blob)
+
+
+def _switch_denied(base, rec, ctx, names, why):
+    detail = why if why in ("mismatch", "missing") else "mismatch"
+    _audit(base, "write_denied", user=(ctx or {}).get("user"), feature=_known_feature((rec or {}).get("feature")),
+           names=names, ok=False, err="param_digest", detail=detail)
+    return _reply(confirm_mode.PARAM_PIN_MSG)
+
+
 def _db(base):
     os.makedirs(os.path.join(base, "state"), exist_ok=True)
     conn = sqlite3.connect(os.path.join(base, "state", "switches.db"), check_same_thread=False)
@@ -1319,7 +1365,10 @@ def _reserve(base, ctx, feature_id, turn_on, now, cfg, extra=None):
     digits = confirm_mode.code_digits(cfg)
     span = 10 ** digits
     try:
-        conn.execute("delete from pending_switches where ts < ?", (now - _pending_ttl(cfg, extra),))
+        cutoff = now - _pending_ttl(cfg, extra)
+        stale_codes = [row[0] for row in conn.execute(
+            "select code from pending_switches where ts < ?", (cutoff,))]
+        conn.execute("delete from pending_switches where ts < ?", (cutoff,))
         for _ in range(8):
             code = "%0*d" % (digits, random.SystemRandom().randint(0, span - 1))
             used = conn.execute("select 1 from used_switches where code=?", (code,)).fetchone()
@@ -1336,12 +1385,23 @@ def _reserve(base, ctx, feature_id, turn_on, now, cfg, extra=None):
             if extra:
                 payload.update(extra)
             try:
+                payload = json.loads(json.dumps(payload, ensure_ascii=False))
+            except (TypeError, ValueError):
+                continue
+            # 摘要写不进独立表就不落待确认。不能悄悄留一条没有封条的记录。
+            if not confirm_mode.seal_put(base, "switch", code, _switch_digest(payload), now):
+                continue
+            try:
                 conn.execute("insert into pending_switches(code, ts, payload) values(?,?,?)",
                              (code, now, json.dumps(payload, ensure_ascii=False)))
                 conn.commit()
-                return code
             except sqlite3.IntegrityError:
+                confirm_mode.seal_drop(base, "switch", code)
                 continue
+            for old in stale_codes:
+                if old != code:
+                    confirm_mode.seal_drop(base, "switch", old)
+            return code
     finally:
         conn.close()
     raise RuntimeError("no code")
@@ -1378,6 +1438,7 @@ def _take_pending(base, code, now, cfg):
         if too_old:
             conn.execute("delete from pending_switches where code=?", (code,))
             conn.commit()
+            confirm_mode.seal_drop(base, "switch", code)
             return None, "expired"
         return rec, ""
     finally:
@@ -1417,6 +1478,7 @@ def _mark_used(base, code, now, token=""):
             conn.execute("insert or ignore into used_switch_tokens(token, ts) values(?,?)", (token, now))
         conn.execute("delete from pending_switches where code=?", (code,))
         conn.commit()
+        confirm_mode.seal_drop(base, "switch", code)
         row = conn.execute("select 1 from used_switches where code=?", (code,)).fetchone()
         return bool(row)
     finally:
@@ -1458,6 +1520,10 @@ def try_confirm(cfg, base, cfg_path, code, ctx, cancel=False, names=(), now=None
         _audit(base, "deny", user=ctx.get("user"), feature=rec.get("feature"), names=names)
         return _reply(NOT_OWNER if ctx.get("chat_type") == "p2p" else GROUP_REDIRECT)
     mode = rec.get("mode") or "code"
+    if not cancel:
+        why = confirm_mode.seal_check(base, "switch", code, _switch_digest(rec))
+        if why != "ok":
+            return _switch_denied(base, rec, ctx, names, why)
     if mode == "button" and not cancel:
         return _reply("这次请点卡片上的「确认」。回复数字不算。")
     if mode == "button" and cancel:
@@ -1502,6 +1568,7 @@ def _drop_switch(base, code):
     try:
         conn.execute("delete from pending_switches where code=?", (code,))
         conn.commit()
+        confirm_mode.seal_drop(base, "switch", code)
     finally:
         conn.close()
 
@@ -1800,6 +1867,10 @@ def try_click(cfg, base, cfg_path, token, op, given_hash, ctx, names=(), now=Non
         return _reply(NOT_OWNER)
     cancel = op == "no"
     mode = rec.get("mode") or "code"
+    if not cancel:
+        why = confirm_mode.seal_check(base, "switch", code, _switch_digest(rec))
+        if why != "ok":
+            return _switch_denied(base, rec, ctx, names, why)
     if mode == "code":
         return _reply("这次请回复确认码，点按钮不算。")
     if mode == "button_and_code" and not cancel and not rec.get("code_ok"):
@@ -1849,6 +1920,10 @@ def _refresh_settings(cfg, base, cfg_path, ctx, now):
 
 
 def _accept_switch(cfg, base, cfg_path, code, rec, ctx, cancel, names, now, apply, check):
+    if not cancel:
+        why = confirm_mode.seal_check(base, "switch", code, _switch_digest(rec))
+        if why != "ok":
+            return _switch_denied(base, rec, ctx, names, why)
     if not _mark_used(base, code, now, rec.get("token") or ""):
         return _reply("确认没能记下，请稍后再试。")
     if rec.get("feature") == "confirm_mode":
@@ -1859,11 +1934,12 @@ def _accept_switch(cfg, base, cfg_path, code, rec, ctx, cancel, names, now, appl
     if rec.get("feature") == "batch" and isinstance(rec.get("changes"), list):
         return _finish_batch(cfg, base, cfg_path, rec, ctx, cancel, names, apply, check)
     item = feature(rec.get("feature"))
+    if cancel:
+        # 取消不改配置。功能名被改成认不出的值时也不能拦住取消。
+        _audit(base, "cancel", user=ctx.get("user"), feature=item["id"] if item else "", names=names)
+        return _reply("已取消。配置没有改。")
     if not item:
         return _reply("这项不能在对话里改。回复「设置」看能改的功能。")
-    if cancel:
-        _audit(base, "cancel", user=ctx.get("user"), feature=item["id"], names=names)
-        return _reply("已取消。配置没有改。")
     if not apply:
         _audit(base, "drill", user=ctx.get("user"), feature=item["id"], names=names)
         return _reply(DRILL)
@@ -2013,7 +2089,7 @@ def _scrub(text, names):
     return text[:300]
 
 
-def _audit(base, action, user="", feature="", on=None, chat="", names=(), ok=True, reason=""):
+def _audit(base, action, user="", feature="", on=None, chat="", names=(), ok=True, reason="", err="", detail=""):
     if not base:
         return
     folder = os.path.join(base, "logs")
@@ -2028,6 +2104,10 @@ def _audit(base, action, user="", feature="", on=None, chat="", names=(), ok=Tru
             "chat": "p2p" if chat == "p2p" else ("group" if chat == "group" else ""),
             "reason": _scrub(reason, names),
         }
+        if err:
+            row["err"] = str(err)[:40]
+        if detail in ("mismatch", "missing"):
+            row["detail"] = detail
         if on is not None:
             row["on"] = bool(on)
         path = os.path.join(folder, "feature_switch.jsonl")
